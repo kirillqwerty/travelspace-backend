@@ -1,0 +1,20 @@
+[
+  {
+    "id": "be086614-623d-42dc-9eb7-43fd7c783db5",
+    "title": "Раннее бронирование Грузии −10%",
+    "image": "https://images.pexels.com/photos/11815773/pexels-photo-11815773.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "description": "Бронируйте тур в Кобулети до 1 марта 2026 года и получите скидку 10% на любой заезд лета.",
+    "valid_until": "2026-03-01",
+    "related_tour_slug": "gruziya-kobuleti-10-dney",
+    "active": true
+  },
+  {
+    "id": "99013114-9d09-4f4f-9063-69645c38bc62",
+    "title": "Третий в номер -50%",
+    "image": "https://images.pexels.com/photos/97083/pexels-photo-97083.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+    "description": "Для семей с детьми: третий гость в номере оплачивает только 50% стоимости тура.",
+    "valid_until": "2026-08-31",
+    "related_tour_slug": "",
+    "active": true
+  }
+]

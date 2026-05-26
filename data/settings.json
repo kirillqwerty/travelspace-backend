@@ -1,0 +1,37 @@
+{
+  "company_name": "TRAVELSPACE — Туроператор из Минска",
+  "company_short": "TRAVELSPACE",
+  "phone": "+375 29 636-99-11",
+  "phone_link": "+375296369911",
+  "email": "info@travel-space.by",
+  "lead_email": "leads@travel-space.by",
+  "address": "пр-т Независимости 58, 220005, Минск",
+  "work_hours": "Ежедневно с 10:00 до 19:00",
+  "unp": "100000000",
+  "legal_name": "ООО \"Туроператор\" (демо-данные)",
+  "header_phones": [
+    {
+      "label": "Грузия и Дагестан",
+      "phone": "636-99-11",
+      "link": "+375296369911"
+    },
+    {
+      "label": "Питер и Карелия",
+      "phone": "636-22-99",
+      "link": "+375296362299"
+    }
+  ],
+  "messengers": {
+    "viber": "+375296369911",
+    "telegram": "travelspace_by",
+    "whatsapp": "+375296369911"
+  },
+  "social": {
+    "instagram": "",
+    "vk": ""
+  },
+  "analytics": {
+    "yandex_metrika": "",
+    "google_analytics": ""
+  }
+}

@@ -1,0 +1,55 @@
+[
+  {
+    "id": "193485b1-c1e0-4de8-9121-6c264d46a247",
+    "name": "Анна Ковалёва",
+    "role": "Менеджер по Грузии и Кавказу",
+    "phone": "+375 29 636-99-11",
+    "phone_link": "+375296369911",
+    "regions": [
+      "georgia-kobuleti",
+      "dagestan"
+    ],
+    "viber": "+375296369911",
+    "telegram": "anna_travelspace",
+    "whatsapp": "+375296369911",
+    "photo": "",
+    "order": 1,
+    "active": true
+  },
+  {
+    "id": "854cb6b5-51bf-415b-9f94-e9b78911beb1",
+    "name": "Дмитрий Сахаров",
+    "role": "Менеджер по России",
+    "phone": "+375 29 636-22-99",
+    "phone_link": "+375296362299",
+    "regions": [
+      "saint-petersburg",
+      "kareliya"
+    ],
+    "viber": "+375296362299",
+    "telegram": "dmitry_travelspace",
+    "whatsapp": "+375296362299",
+    "photo": "",
+    "order": 2,
+    "active": true
+  },
+  {
+    "id": "d67aaaf0-2264-4844-a9ee-2d5bfab04908",
+    "name": "Ольга Михайлова",
+    "role": "Старший менеджер · Агентствам",
+    "phone": "+375 29 345-67-89",
+    "phone_link": "+375293456789",
+    "regions": [
+      "georgia-kobuleti",
+      "saint-petersburg",
+      "kareliya",
+      "dagestan"
+    ],
+    "viber": "+375293456789",
+    "telegram": "olga_travelspace",
+    "whatsapp": "+375293456789",
+    "photo": "",
+    "order": 3,
+    "active": true
+  }
+]
