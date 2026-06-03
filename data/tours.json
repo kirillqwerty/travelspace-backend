@@ -761,5 +761,390 @@
     "seo_description": "Короткий автобусный тур в Дагестан из Минска. Сулакский каньон, Дербент, море.",
     "order": 5,
     "active": true
+  },
+  {
+    "title": "тур в Грузию",
+    "tagline": "Подзаголовок",
+    "region_name": "Регион (название)",
+    "duration": "10 дней 10 ночей",
+    "departure_city": "Минск",
+    "price_from": 1000,
+    "price_type": "от",
+    "currency": "USD",
+    "short_description": "Краткое описаниеКраткое описаниеКраткое описаниеКраткое описаниеКраткое описаниеКраткое описаниеКраткое описание",
+    "description": "Полное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тураПолное описание тура",
+    "hero_image": "/uploads/ae6b8c94-cd6b-4842-bbcb-a1dbe8612aaf.jpg",
+    "seo_title": "SEO Title",
+    "seo_description": "SEO Description",
+    "order": 1,
+    "active": true,
+    "badges": [],
+    "gallery": [
+      "/uploads/1cc368ec-baaa-4b4d-a351-ba58686f284b.jpg",
+      "/uploads/dd0a812f-b5ea-487a-a129-d7b80314f4ac.jpg",
+      "/uploads/ef878482-48e6-4bf0-b61d-a85c04da18a3.jpg"
+    ],
+    "highlights": [
+      "Главные впечатления 1",
+      "Главные впечатления 2"
+    ],
+    "what_to_see": [
+      "Что посмотреть 1",
+      "Что посмотреть 2"
+    ],
+    "included": [
+      "Что входит 1 ",
+      "Что входит 2",
+      "Что входит 3"
+    ],
+    "excluded": [
+      "Что не входит 1 ",
+      "Что не входит 2",
+      "Что не входит 3"
+    ],
+    "important_info": [
+      "Важная информация",
+      "Важная информация"
+    ],
+    "program": [
+      {
+        "day": 1,
+        "title": "день 1",
+        "description": "описание",
+        "image": "/uploads/0b413520-0a33-49ee-ad8a-795d4a57b542.jpg",
+        "notes": ""
+      }
+    ],
+    "chains": [
+      {
+        "id": "e693f05d-b340-458a-bc4c-353a3f69e72c",
+        "title": "Автобус 1",
+        "description": "комментарий ",
+        "order": 1,
+        "active": true,
+        "dates": [
+          {
+            "id": "19322ada-9fc6-461a-bc74-5669f6e6e7d9",
+            "start": "2026-06-01",
+            "end": "2026-06-10",
+            "price": 1000,
+            "currency": "USD",
+            "status": "active",
+            "comment": ""
+          },
+          {
+            "id": "62c6d7a9-7f1b-4cdc-853e-37f22aac632d",
+            "start": "2026-06-10",
+            "end": "2026-06-20",
+            "price": 1000,
+            "currency": "USD",
+            "status": "active",
+            "comment": ""
+          },
+          {
+            "id": "53b494b1-8b68-4398-94a4-426d91bea74c",
+            "start": "2026-06-20",
+            "end": "2026-06-30",
+            "price": 1000,
+            "currency": "USD",
+            "status": "active",
+            "comment": ""
+          }
+        ],
+        "hotels": [
+          {
+            "id": "a88012dc-33e1-498a-a1c0-b639d5a63251",
+            "name": "Colosseum Marina Hotel",
+            "description": "описание отеля",
+            "images": [
+              "/uploads/a8c47ec8-2515-486c-9873-7a195eb25e8d.jpg",
+              "/uploads/43fb89db-395a-46d5-9a4f-250788d72308.jpg",
+              "/uploads/59ec2958-e216-45ae-9497-7fc10f570e33.jpg"
+            ],
+            "image": "/uploads/a8c47ec8-2515-486c-9873-7a195eb25e8d.jpg",
+            "meal": "питание",
+            "location": "расположение",
+            "order": "",
+            "active": true,
+            "rooms": [
+              {
+                "id": "1f7cb815-e966-4f13-8e74-834f35220583",
+                "number": "№ 201",
+                "title": "номер",
+                "description": "описание номера",
+                "gallery": [
+                  "/uploads/94dda383-b853-43ec-bced-35a890bde65c.jpg",
+                  "/uploads/a66a5f5d-ba7e-4dd8-8323-a32003fb243f.jpg",
+                  "/uploads/d26f5ea9-b94f-4852-9fe1-36e0d967d176.jpg",
+                  "/uploads/7a8fb536-1f53-4361-b9d3-3ef4667d02cb.jpg",
+                  "/uploads/6e2c01fa-4e16-437a-8251-a5653ed05145.jpg",
+                  "/uploads/d68d1831-92ac-4f77-b548-fa05fb94f1bc.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              },
+              {
+                "id": "5f647b7e-2e88-4b79-9263-4908f078dfd2",
+                "number": "№ 202",
+                "title": "номер",
+                "description": "описание номера",
+                "gallery": [
+                  "/uploads/24eef9fe-a983-4b69-8ea5-e7000065a33c.jpg",
+                  "/uploads/cf504da8-62d2-4ef5-9352-bc90a597122c.jpg",
+                  "/uploads/cfad1089-fbff-4a5e-8a5c-9ff9e3bd0adb.jpg",
+                  "/uploads/75e8bc3e-9d4c-4093-95df-2845113a23cd.jpg",
+                  "/uploads/baa87456-3483-4cdb-91e8-250598b2ba46.jpg",
+                  "/uploads/c60a606b-4282-44c2-917a-45674352e6ad.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              },
+              {
+                "id": "ce44444b-2fb8-4591-85fe-318046914880",
+                "number": "№ 203",
+                "title": "номер",
+                "description": "описание номера",
+                "gallery": [
+                  "/uploads/8e476da9-1aa7-4e5c-b77b-d08c23c3034b.jpg",
+                  "/uploads/f5ed7363-f0b3-4e04-804a-e64a7a4c4eef.jpg",
+                  "/uploads/f7e9a8d5-c471-46ca-b834-cf41693b5fec.jpg",
+                  "/uploads/e36f93a2-1e05-4ed5-9688-b7bcbeb52347.jpg",
+                  "/uploads/9e869049-7b9c-4822-9255-68e305db8101.jpg",
+                  "/uploads/e3b57f1a-9e93-4479-88dd-34702e871bb2.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              }
+            ]
+          },
+          {
+            "id": "db99b450-17fb-456f-941d-72f312db4983",
+            "name": "Отель Fortuna Batumi 5",
+            "description": "описание отеля",
+            "images": [
+              "/uploads/7b3c8afa-a027-41ec-9914-2abe3234aff4.jpg",
+              "/uploads/30e5f104-06f9-4b56-aa3e-1be8b711273d.jpg",
+              "/uploads/62a9570e-c924-46d8-9e8b-c4fb32bc3d44.jpg"
+            ],
+            "image": "/uploads/7b3c8afa-a027-41ec-9914-2abe3234aff4.jpg",
+            "meal": "питание",
+            "location": "расположение",
+            "order": "",
+            "active": true,
+            "rooms": [
+              {
+                "id": "c2c10282-b3c0-4682-93e2-b9c377a9366b",
+                "number": "№ 210",
+                "title": "номер",
+                "description": "описание номера",
+                "gallery": [
+                  "/uploads/a1155921-ffc1-4aab-b427-3324bc4965a7.jpg",
+                  "/uploads/dbbadcdf-2baf-4000-bc96-a418cb11e9f8.jpg",
+                  "/uploads/640b38b9-815a-4c19-b7a9-d5824de0b020.jpg",
+                  "/uploads/0e347187-f2bd-415b-b615-a34f242277c9.jpg",
+                  "/uploads/758e0cb5-756b-4d27-9dfc-acf041dd6437.jpg",
+                  "/uploads/a207e722-5816-4c25-9326-3bd7a6b57597.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              },
+              {
+                "id": "14161204-b28b-4c0f-bec0-0aa0e3b34823",
+                "number": "№ 211",
+                "title": "номер",
+                "description": "описание",
+                "gallery": [
+                  "/uploads/9649d1eb-042f-41c0-8be5-71799904d75f.jpg",
+                  "/uploads/e5ef5143-cd01-4f60-81a2-3852c79b25d3.jpg",
+                  "/uploads/d2ba6e35-d5d6-48c4-af00-87af007ede4a.jpg",
+                  "/uploads/792ccd94-d040-4698-93c9-dc5ac8862681.jpg",
+                  "/uploads/18978145-cc4d-468d-9b95-e1d0153978bc.jpg",
+                  "/uploads/97c975f2-62ad-430d-9835-330aa2d6f9c0.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              },
+              {
+                "id": "b91f18f5-79c9-467b-8349-5eb6608760cb",
+                "number": "№ 210",
+                "title": "номер",
+                "description": "описание",
+                "gallery": [
+                  "/uploads/0ce192a0-9005-4cb4-b71f-6fd367d2b2be.jpg",
+                  "/uploads/8a793b3b-2e08-4970-b7a5-31114da6d18e.jpg",
+                  "/uploads/0e1386a4-e807-4f77-8042-b943b452e71f.jpg",
+                  "/uploads/523860be-c0f1-4526-814f-e6934be2b925.jpg",
+                  "/uploads/ebc55bdc-17be-444e-a2d8-b326865b6244.jpg",
+                  "/uploads/8f3c9c94-592f-4424-84ae-f936a909113c.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "564fe9b4-2961-4c36-84f3-f5529992dc69",
+        "title": "Автобус 2",
+        "description": "комменатрий",
+        "order": 2,
+        "active": true,
+        "dates": [
+          {
+            "id": "17fcb3ac-6e95-4910-aed6-0444dfe43b0a",
+            "start": "2026-06-05",
+            "end": "2026-06-15",
+            "price": 1000,
+            "currency": "USD",
+            "status": "active",
+            "comment": ""
+          },
+          {
+            "id": "b5d062d9-d8e9-42d0-8674-c4bdb51f8fb1",
+            "start": "2026-06-15",
+            "end": "2026-06-25",
+            "price": 1000,
+            "currency": "USD",
+            "status": "active",
+            "comment": ""
+          },
+          {
+            "id": "c00a24eb-8728-4e7a-8e9a-82274d5fa947",
+            "start": "2026-06-25",
+            "end": "2026-07-05",
+            "price": 1000,
+            "currency": "USD",
+            "status": "active",
+            "comment": ""
+          }
+        ],
+        "hotels": [
+          {
+            "id": "9e430745-0974-442c-a9fc-85deea080783",
+            "name": "JRW Welmond Hotel",
+            "description": "описание",
+            "images": [
+              "/uploads/fe1563e3-572d-4123-a4e9-408dc23979b9.jpg",
+              "/uploads/5346753e-1b64-4d7c-9794-fe81007c888b.jpg",
+              "/uploads/24264161-4e90-4341-a433-55b42655965b.jpg"
+            ],
+            "image": "/uploads/fe1563e3-572d-4123-a4e9-408dc23979b9.jpg",
+            "meal": "питание",
+            "location": "расположение",
+            "order": "",
+            "active": true,
+            "rooms": [
+              {
+                "id": "0038e5ea-d48b-48db-93f1-6d19143b7508",
+                "number": "№211",
+                "title": "номер",
+                "description": "описание",
+                "gallery": [
+                  "/uploads/480442dc-ade7-4234-a7ba-1c1bd5edea15.jpg",
+                  "/uploads/189063ed-7f91-4e4f-983e-6b43a2952608.jpg",
+                  "/uploads/408d063e-5ca6-4e4c-b2e8-df3e670613d8.jpg",
+                  "/uploads/0bd72f87-5947-4efe-b3fe-be59cd1ded1a.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              },
+              {
+                "id": "2df39ffb-bf54-41ff-898f-0e7fbc5d9e0b",
+                "number": "№2111",
+                "title": "номер",
+                "description": "описание",
+                "gallery": [
+                  "/uploads/ce624687-9700-4782-b145-88047bca566d.jpg",
+                  "/uploads/beebb65a-516c-426e-b9b1-9afba6ce1810.jpg",
+                  "/uploads/8c1f1983-d73a-45cd-a03c-e89ba4fca6cb.jpg",
+                  "/uploads/32026451-7df8-47dc-9d09-962b94d53415.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              }
+            ]
+          },
+          {
+            "id": "f23ca840-efaa-4c99-b5c0-44876c7c30b8",
+            "name": "Отель Radisson Blu Hotel Batumi",
+            "description": "описание",
+            "images": [
+              "/uploads/b9860339-a37b-4e5a-b064-7c0636f43f8e.jpg",
+              "/uploads/73b64a0b-41a8-4d64-b2f0-e7fc3f545e67.jpg",
+              "/uploads/7a619f3a-7ee0-46c9-881a-4d90729f1c89.jpg"
+            ],
+            "image": "/uploads/b9860339-a37b-4e5a-b064-7c0636f43f8e.jpg",
+            "meal": "питание",
+            "location": "расположение",
+            "order": "",
+            "active": true,
+            "rooms": [
+              {
+                "id": "7d09375e-4627-4ccb-a9cf-05bb29ea2d2c",
+                "number": "№2111",
+                "title": "номер",
+                "description": "описание",
+                "gallery": [
+                  "/uploads/c85e0f07-e4b8-4bb3-8e58-d1baf0b96203.jpg",
+                  "/uploads/6656735f-ced9-4684-81a8-6695fd7e6a9b.jpg",
+                  "/uploads/a5717cf2-1c3d-41a0-8b36-2650f943bbf4.jpg",
+                  "/uploads/00a58ab2-45c2-4a5d-8c35-053660472895.jpg",
+                  "/uploads/b3099469-dbf4-440c-88cf-a25965f66add.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              },
+              {
+                "id": "c75fe502-36c4-4e74-8391-95fa5e7f65dc",
+                "number": "№555",
+                "title": "номер",
+                "description": "описание",
+                "gallery": [
+                  "/uploads/b430aa0c-af12-4438-b5a0-ba795769adb8.jpg",
+                  "/uploads/2f59ad4f-5b01-4c75-968e-930048eae3f4.jpg",
+                  "/uploads/e3b8abde-e021-48b5-a7ca-913014624ac0.jpg",
+                  "/uploads/89a1c157-9f02-486d-bdfd-f89fc00d67cd.jpg"
+                ],
+                "video_url": "https://www.youtube.com/watch?v=8bIS5AWGuw0",
+                "unavailable_dates": [],
+                "order": "",
+                "active": true
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "dates": [],
+    "hotels": [],
+    "faq": [
+      {
+        "question": "вопрос",
+        "answer": "ответ"
+      }
+    ],
+    "map_embed": "",
+    "slug": "tur-v-gruziyu",
+    "region_slug": "region-nazvanie",
+    "id": "33069b4f-3a25-482a-9481-b4bfef7c9d77"
   }
 ]

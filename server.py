@@ -24,7 +24,8 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status  # noqa: E402
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, status, UploadFile, File
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, EmailStr  # noqa: E402
 
@@ -45,7 +46,10 @@ logger = logging.getLogger("travelspace")
 
 app = FastAPI(title="Tour Operator API")
 api = APIRouter(prefix="/api")
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+app.mount("/uploads", StaticFiles(directory=str(UPLOAD_DIR)), name="uploads")
 
 # ---------- Models ---------------------------------------------------------
 
@@ -97,7 +101,11 @@ def _now() -> str:
 def _ok(extra: dict | None = None) -> dict:
     return {"ok": True, **(extra or {})}
 
-
+def _order_value(item: dict) -> int:
+    try:
+        return int(item.get("order") or 0)
+    except (TypeError, ValueError):
+        return 0
 # ---------- Public endpoints ----------------------------------------------
 
 
@@ -119,7 +127,7 @@ async def get_tours(region: str | None = None, badge: str | None = None):
         items = [t for t in items if t.get("region_slug") == region]
     if badge:
         items = [t for t in items if badge in (t.get("badges") or [])]
-    items.sort(key=lambda x: x.get("order", 0))
+    items.sort(key=_order_value)
     return items
 
 
@@ -136,14 +144,14 @@ async def get_specialists(region: str | None = None):
     items = [s for s in list_items("specialists") if s.get("active", True)]
     if region:
         items = [s for s in items if region in (s.get("regions") or [])]
-    items.sort(key=lambda x: x.get("order", 0))
+    items.sort(key=_order_value)
     return items
 
 
 @api.get("/reviews")
 async def get_reviews():
     items = [r for r in list_items("reviews") if r.get("active", True)]
-    items.sort(key=lambda x: x.get("order", 0))
+    items.sort(key=_order_value)
     return items
 
 
@@ -165,7 +173,7 @@ async def get_article(slug: str):
 @api.get("/faq")
 async def get_faq():
     items = [f for f in list_items("faq") if f.get("active", True)]
-    items.sort(key=lambda x: x.get("order", 0))
+    items.sort(key=_order_value)
     return items
 
 
@@ -206,7 +214,32 @@ async def login(payload: LoginIn):
 async def me(current=Depends(get_current_admin)):
     return current
 
+@api.post("/admin/upload")
+async def admin_upload_file(
+    file: UploadFile = File(...),
+    current=Depends(get_current_admin),
+):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Можно загружать только изображения")
 
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
+        ext = ".jpg"
+
+    filename = f"{uuid.uuid4()}{ext}"
+    path = UPLOAD_DIR / filename
+
+    content = await file.read()
+
+    # 2 MB лимит уже ПОСЛЕ сжатия на фронте
+    if len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Файл слишком большой")
+
+    path.write_bytes(content)
+
+    return {
+        "url": f"/uploads/{filename}"
+    }
 # ---------- Admin CRUD -----------------------------------------------------
 
 
