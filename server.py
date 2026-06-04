@@ -16,7 +16,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -106,6 +106,42 @@ def _order_value(item: dict) -> int:
         return int(item.get("order") or 0)
     except (TypeError, ValueError):
         return 0
+
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _tour_dates(tour: dict) -> list[dict]:
+    dates = list(tour.get("dates") or [])
+
+    for chain in tour.get("chains") or []:
+        dates.extend(chain.get("dates") or [])
+
+    return dates
+
+
+def _is_tour_expired(tour: dict) -> bool:
+    tomorrow = date.today() + timedelta(days=1)
+
+    start_dates = [
+        parsed
+        for parsed in (_parse_date(d.get("start")) for d in _tour_dates(tour))
+        if parsed
+    ]
+
+    if not start_dates:
+        return False
+
+    return not any(start_date > tomorrow for start_date in start_dates)
+
+
+
 # ---------- Public endpoints ----------------------------------------------
 
 
@@ -134,7 +170,7 @@ async def get_tours(region: str | None = None, badge: str | None = None):
 @api.get("/tours/{slug}")
 async def get_tour(slug: str):
     t = get_by("tours", "slug", slug)
-    if not t or not t.get("active", True):
+    if not t or not t.get("active", True) or _is_tour_expired(t):
         raise HTTPException(status_code=404, detail="Тур не найден")
     return t
 
