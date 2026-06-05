@@ -688,7 +688,7 @@ SETTINGS = {
     "phone": "+375 29 636-99-11",
     "phone_link": "+375296369911",
     "email": "info@travel-space.by",
-    "lead_email": "leads@travel-space.by",
+    "lead_email": "an.tonny.office@gmail.com",
     "address": "пр-т Независимости 58, 220005, Минск",
     "work_hours": "Ежедневно с 10:00 до 19:00",
     "unp": "100000000",

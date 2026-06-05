@@ -15,8 +15,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+import smtplib
 import uuid
 from datetime import datetime, timezone, date, timedelta
+from email.message import EmailMessage
+from html import escape
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -24,7 +27,7 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, HTTPException, status, UploadFile, File
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, EmailStr  # noqa: E402
@@ -100,6 +103,146 @@ def _now() -> str:
 
 def _ok(extra: dict | None = None) -> dict:
     return {"ok": True, **(extra or {})}
+
+def _as_text(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _lead_form_type_label(form_type: str | None) -> str:
+    labels = {
+        "consultation": "Консультация",
+        "tour": "Заявка на тур",
+        "agency": "Заявка агентства",
+    }
+    return labels.get(form_type or "", form_type or "Заявка")
+
+
+def _lead_email_recipient() -> str | None:
+    settings = load("settings", default={})
+    return (
+        _as_text(settings.get("lead_email"))
+        or _as_text(os.environ.get("LEAD_EMAIL"))
+        or None
+    )
+
+
+def _lead_email_rows(lead: dict) -> list[tuple[str, str]]:
+    extra = lead.get("extra") if isinstance(lead.get("extra"), dict) else {}
+    rows = [
+        ("Тип заявки", _lead_form_type_label(lead.get("form_type"))),
+        ("Имя", _as_text(lead.get("name")) or "—"),
+        ("Телефон", _as_text(lead.get("phone"))),
+        ("Тур", _as_text(lead.get("tour")) or "—"),
+        ("Дата", _as_text(lead.get("date")) or "—"),
+        # ("Регион", _as_text(lead.get("region")) or "—"),
+        # ("Страница", _as_text(lead.get("source_page")) or "—"),
+        ("Комментарий", _as_text(lead.get("comment")) or "—"),
+    ]
+
+    if extra:
+        extra_labels = {
+            "hotel": "Отель",
+            "room": "Номер",
+            "meal_plan": "План питания",
+            "final_price": "Итоговая стоимость",
+            "company": "Компания / агентство",
+            "email": "Email клиента",
+        }
+        for key, label in extra_labels.items():
+            if _as_text(extra.get(key)):
+                rows.append((label, _as_text(extra.get(key))))
+
+    rows.extend(
+        [
+            ("ID заявки", _as_text(lead.get("id"))),
+            ("Создана", _as_text(lead.get("created_at"))),
+        ]
+    )
+    return rows
+
+
+def _build_lead_email(lead: dict, recipient: str) -> EmailMessage:
+    settings = load("settings", default={})
+    company = _as_text(settings.get("company_short")) or "TRAVELSPACE"
+    subject = f"Новая заявка с сайта {company}"
+    if _as_text(lead.get("tour")):
+        subject += f": {_as_text(lead.get('tour'))}"
+
+    rows = _lead_email_rows(lead)
+    text_body = "Новая заявка с сайта\n\n" + "\n".join(
+        f"{label}: {value}" for label, value in rows
+    )
+    html_rows = "".join(
+        "<tr>"
+        f"<td style='padding:8px 12px;border:1px solid #e5e7eb;font-weight:600'>{escape(label)}</td>"
+        f"<td style='padding:8px 12px;border:1px solid #e5e7eb'>{escape(value)}</td>"
+        "</tr>"
+        for label, value in rows
+    )
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif;color:#111827;line-height:1.5">
+      <h2 style="margin:0 0 16px">Новая заявка с сайта</h2>
+      <table style="border-collapse:collapse;width:100%;max-width:760px;font-size:14px">
+        {html_rows}
+      </table>
+    </div>
+    """
+
+    from_email = (
+        _as_text(os.environ.get("SMTP_FROM_EMAIL"))
+        or _as_text(os.environ.get("SMTP_USER"))
+        or f"no-reply@{os.environ.get('SMTP_FROM_DOMAIN', 'travelspace.by')}"
+    )
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_email
+    msg["To"] = recipient
+    msg.set_content(text_body)
+    msg.add_alternative(html_body, subtype="html")
+    return msg
+
+
+def _send_lead_email(lead: dict) -> None:
+    recipient = _lead_email_recipient()
+    if not recipient:
+        logger.warning("Lead email skipped: settings.lead_email is empty")
+        return
+
+    smtp_host = _as_text(os.environ.get("SMTP_HOST"))
+    smtp_user = _as_text(os.environ.get("SMTP_USER"))
+    smtp_password = _as_text(os.environ.get("SMTP_PASSWORD"))
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_use_ssl = os.environ.get("SMTP_USE_SSL", "false").lower() == "true"
+    smtp_use_tls = os.environ.get("SMTP_USE_TLS", "true").lower() == "true"
+
+    if not smtp_host:
+        logger.warning(
+            "Lead email skipped: SMTP_HOST is not configured. Recipient would be %s",
+            recipient,
+        )
+        return
+
+    msg = _build_lead_email(lead, recipient)
+
+    try:
+        if smtp_use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20) as server:
+                if smtp_user and smtp_password:
+                    server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+                if smtp_use_tls:
+                    server.starttls()
+                if smtp_user and smtp_password:
+                    server.login(smtp_user, smtp_password)
+                server.send_message(msg)
+        logger.info("Lead email sent: lead_id=%s recipient=%s", lead.get("id"), recipient)
+    except Exception:
+        logger.exception("Lead email sending failed: lead_id=%s recipient=%s", lead.get("id"), recipient)
 
 def _order_value(item: dict) -> int:
     try:
@@ -220,7 +363,7 @@ async def get_promotions():
 
 
 @api.post("/leads")
-async def create_lead(payload: LeadIn):
+async def create_lead(payload: LeadIn, background_tasks: BackgroundTasks):
     phone = _ensure_phone(payload.phone)
     if not payload.consent:
         raise HTTPException(status_code=422, detail="Необходимо согласие на обработку персональных данных")
@@ -230,6 +373,7 @@ async def create_lead(payload: LeadIn):
     lead["status"] = "new"
     lead["created_at"] = _now()
     add_item("leads", lead)
+    background_tasks.add_task(_send_lead_email, lead)
     logger.info("New lead saved: id=%s phone=%s tour=%s", lead["id"], phone, payload.tour_slug)
     return _ok({"id": lead["id"]})
 
