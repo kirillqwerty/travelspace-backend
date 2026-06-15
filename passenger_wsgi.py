@@ -1,9 +1,16 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(__file__))
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+sys.path.insert(0, CURRENT_DIR)
+os.chdir(CURRENT_DIR)
+
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(CURRENT_DIR, ".env"))
 
 from a2wsgi import ASGIMiddleware
-from server import app
+from server import app as fastapi_app
 
-application = ASGIMiddleware(app)
+application = ASGIMiddleware(fastapi_app)

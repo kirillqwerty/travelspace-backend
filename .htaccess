@@ -1,0 +1,57 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home/travelspac/travelspace.by"
+PassengerBaseURI "/"
+PassengerPython "/home/travelspac/virtualenv/travelspace.by/3.13/bin/python"
+PassengerAppLogFile "/home/travelspac/logs/passenger-travelspace.log"
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+Options -Indexes
+
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresDefault A0
+    ExpiresByType image/gif A691200
+    ExpiresByType image/png A691200
+    ExpiresByType image/jpeg A691200
+    ExpiresByType image/webp A691200
+    ExpiresByType text/css A691200
+    ExpiresByType text/javascript A691200
+    ExpiresByType application/javascript A691200
+    ExpiresByType font/ttf A691200
+    ExpiresByType font/otf A691200
+    ExpiresByType font/woff A691200
+    ExpiresByType font/woff2 A691200
+</IfModule>
+
+<FilesMatch "^(\.env|\.web\.config|php_errors\.log|error_log)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+    </IfModule>
+</FilesMatch>
+
+ErrorDocument 401 "Unauthorized"
+ErrorDocument 403 "Forbidden"
+
+RewriteEngine On
+
+# React build static files
+RewriteRule ^static/(.*)$ public/static/$1 [L]
+
+# Public files from React build root
+RewriteRule ^favicon\.ico$ public/favicon.ico [L]
+RewriteRule ^manifest\.json$ public/manifest.json [L]
+RewriteRule ^asset-manifest\.json$ public/asset-manifest.json [L]
+RewriteRule ^background-journey\.mp4$ public/background-journey.mp4 [L]
+RewriteRule ^og-image\.jpg$ public/og-image.jpg [L]
+
+# Do not touch SSL / CloudLinux / Let's Encrypt files
+RewriteRule ^\.well-known/ - [L]
+
+# Everything else goes to Passenger / FastAPI
+
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION BEGIN
+<IfModule Litespeed>
+</IfModule>
+# DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION END

@@ -33,5 +33,28 @@
   "analytics": {
     "yandex_metrika": "",
     "google_analytics": ""
-  }
+  },
+  "social_buttons": [
+    {
+      "label": "Viber",
+      "url": "",
+      "icon": "",
+      "color": "#7360F2",
+      "active": true
+    },
+    {
+      "label": "Telegram",
+      "url": "",
+      "icon": "",
+      "color": "#0088CC",
+      "active": true
+    },
+    {
+      "label": "WhatsApp",
+      "url": "",
+      "icon": "",
+      "color": "#25D366",
+      "active": true
+    }
+  ]
 }

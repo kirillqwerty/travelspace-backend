@@ -1,8 +1,11 @@
 """Atomic JSON file storage for the tour operator site.
 
-Each collection (tours, directions, specialists, leads, etc.) is stored as a
-JSON document on disk at /app/backend/data/<name>.json. A single threading
-lock guards reads/writes to prevent partial reads while writing.
+Each collection is stored as a JSON document on disk.
+By default data is stored in ./data, but on production DATA_DIR can be set
+through .env or Passenger environment variables.
+
+Example:
+DATA_DIR=/home/travelspac/travelspace_storage/data
 """
 
 from __future__ import annotations
@@ -13,7 +16,22 @@ import threading
 from pathlib import Path
 from typing import Any
 
-DATA_DIR = Path(__file__).parent / "data"
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+
+ROOT_DIR = Path(__file__).resolve().parent
+
+if load_dotenv:
+    load_dotenv(ROOT_DIR / ".env")
+
+
+DATA_DIR = Path(
+    os.environ.get("DATA_DIR") or ROOT_DIR / "data"
+).expanduser().resolve()
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 _locks: dict[str, threading.Lock] = {}
@@ -34,12 +52,14 @@ def _path(name: str) -> Path:
 
 
 def load(name: str, default: Any = None) -> Any:
-    """Load a JSON collection. Returns `default` if file missing."""
+    """Load a JSON collection. Returns `default` if file is missing."""
     p = _path(name)
     lock = _lock_for(name)
+
     with lock:
         if not p.exists():
             return [] if default is None else default
+
         with p.open("r", encoding="utf-8") as f:
             return json.load(f)
 
@@ -48,10 +68,14 @@ def save(name: str, data: Any) -> None:
     """Atomically replace a JSON collection on disk."""
     p = _path(name)
     lock = _lock_for(name)
+
     with lock:
+        p.parent.mkdir(parents=True, exist_ok=True)
+
         tmp = p.with_suffix(".json.tmp")
         with tmp.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+
         os.replace(tmp, p)
 
 
@@ -77,20 +101,25 @@ def add_item(name: str, item: dict) -> dict:
 def update_item(name: str, item_id: str, patch: dict) -> dict | None:
     items = list_items(name)
     updated: dict | None = None
+
     for i, it in enumerate(items):
         if it.get("id") == item_id:
             items[i] = {**it, **patch}
             updated = items[i]
             break
+
     if updated is not None:
         save(name, items)
+
     return updated
 
 
 def delete_item(name: str, item_id: str) -> bool:
     items = list_items(name)
     new_items = [it for it in items if it.get("id") != item_id]
+
     if len(new_items) == len(items):
         return False
+
     save(name, new_items)
     return True
