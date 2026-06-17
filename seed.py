@@ -35,7 +35,7 @@ def _make_program(days: list[tuple[str, str]]) -> list[dict]:
     ]
 
 
-# region_slug groups tours by destination (used for filters and specialist routing).
+# region_slug groups tours by destination and filters.
 TOURS = [
     {
         "id": _id(),
@@ -461,52 +461,6 @@ TOURS = [
 ]
 
 
-# Specialists are still grouped by region_slug (matches tours' region_slug).
-SPECIALISTS = [
-    {
-        "id": _id(),
-        "name": "Анна Ковалёва",
-        "role": "Менеджер по Грузии и Кавказу",
-        "phone": "+375 29 636-99-11",
-        "phone_link": "+375296369911",
-        "regions": ["georgia-kobuleti", "dagestan"],
-        "viber": "+375296369911",
-        "telegram": "anna_travelspace",
-        "whatsapp": "+375296369911",
-        "photo": "https://images.unsplash.com/photo-1758600587728-9bde755354ad?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBmcmllbmRseSUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTI3OTU0OXww&ixlib=rb-4.1.0&q=85&h=600&w=600",
-        "order": 1,
-        "active": True,
-    },
-    {
-        "id": _id(),
-        "name": "Дмитрий Сахаров",
-        "role": "Менеджер по России",
-        "phone": "+375 29 636-22-99",
-        "phone_link": "+375296362299",
-        "regions": ["saint-petersburg", "kareliya"],
-        "viber": "+375296362299",
-        "telegram": "dmitry_travelspace",
-        "whatsapp": "+375296362299",
-        "photo": "https://images.unsplash.com/photo-1770058428154-9eee8a6a1fbb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBmcmllbmRseSUyMHBvcnRyYWl0fGVufDB8fHx8MTc3OTI3OTU0OXww&ixlib=rb-4.1.0&q=85&h=600&w=600",
-        "order": 2,
-        "active": True,
-    },
-    {
-        "id": _id(),
-        "name": "Ольга Михайлова",
-        "role": "Старший менеджер · Агентствам",
-        "phone": "+375 29 345-67-89",
-        "phone_link": "+375293456789",
-        "regions": ["georgia-kobuleti", "saint-petersburg", "kareliya", "dagestan"],
-        "viber": "+375293456789",
-        "telegram": "olga_travelspace",
-        "whatsapp": "+375293456789",
-        "photo": "https://images.pexels.com/photos/29153940/pexels-photo-29153940.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=600&w=600",
-        "order": 3,
-        "active": True,
-    },
-]
-
 
 REVIEWS = [
     {
@@ -735,8 +689,6 @@ SETTINGS = {
 def run_seed() -> None:
     if _file_missing("tours"):
         save("tours", TOURS)
-    if _file_missing("specialists"):
-        save("specialists", SPECIALISTS)
     if _file_missing("reviews"):
         save("reviews", REVIEWS)
     if _file_missing("articles"):

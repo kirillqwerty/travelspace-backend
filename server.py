@@ -133,7 +133,6 @@ class LeadIn(BaseModel):
     date: str | None = None
     comment: str | None = None
     source_page: str | None = None
-    specialist: str | None = None
     consent: bool = True
     form_type: str = "consultation"  # consultation | tour | agency
     extra: dict | None = None
@@ -248,16 +247,16 @@ def _build_lead_email(lead: dict, recipient: str) -> EmailMessage:
 
     html_rows = "".join(
         "<tr>"
-        f"<td style='padding:8px 12px;border:1px solid #e5e7eb;font-weight:600'>{escape(label)}</td>"
-        f"<td style='padding:8px 12px;border:1px solid #e5e7eb'>{escape(value)}</td>"
+        f"<td style='padding:10px 12px;border:1px solid #d1d5db;background:#f9fafb;color:#111827;font-weight:700'>{escape(label)}</td>"
+        f"<td style='padding:10px 12px;border:1px solid #d1d5db;background:#ffffff;color:#111827'>{escape(value)}</td>"
         "</tr>"
         for label, value in rows
     )
 
     html_body = f"""
-    <div style="font-family:Arial,sans-serif;color:#111827;line-height:1.5">
-      <h2 style="margin:0 0 16px">Новая заявка с сайта</h2>
-      <table style="border-collapse:collapse;width:100%;max-width:760px;font-size:14px">
+    <div style="margin:0;padding:16px;background:#ffffff;font-family:Arial,sans-serif;color:#111827;line-height:1.5">
+      <h2 style="margin:0 0 16px;color:#111827;font-size:20px;line-height:1.25">Новая заявка с сайта</h2>
+      <table style="border-collapse:collapse;width:100%;max-width:760px;background:#ffffff;color:#111827;font-size:14px">
         {html_rows}
       </table>
     </div>
@@ -356,9 +355,178 @@ def _tour_dates(tour: dict) -> list[dict]:
     return dates
 
 
-def _is_tour_expired(tour: dict) -> bool:
-    tomorrow = date.today() + timedelta(days=1)
+def _date_ref_values(item: dict | None) -> set[str]:
+    if not isinstance(item, dict):
+        return set()
 
+    values = {
+        _as_text(item.get("id")),
+        _as_text(item.get("start")),
+        _as_text(item.get("date_id")),
+        _as_text(item.get("date_start")),
+        _as_text(item.get("date_label")),
+    }
+
+    if _as_text(item.get("start")) and _as_text(item.get("end")):
+        values.add(f"{_as_text(item.get('start'))} → {_as_text(item.get('end'))}")
+
+    return {value for value in values if value}
+
+
+def _is_departure_date_actual(item: dict | None, today: date | None = None) -> bool:
+    """Return True when a departure date can still be shown for booking.
+
+    We use the departure start date, not the end date: once the tour has
+    already departed, that specific departure must disappear, but the tour
+    itself must stay active if it has other future dates.
+    """
+
+    if today is None:
+        today = date.today()
+
+    if not isinstance(item, dict):
+        return True
+
+    start = _parse_date(_as_text(item.get("start") or item.get("date_start")))
+    if start:
+        return start >= today
+
+    end = _parse_date(_as_text(item.get("end")))
+    if end:
+        return end >= today
+
+    return True
+
+
+def _clean_stale_room_date_links(rooms: list, removed_refs: set[str], today: date) -> bool:
+    changed = False
+
+    for room in rooms or []:
+        if not isinstance(room, dict):
+            continue
+
+        date_prices = room.get("date_prices")
+        if isinstance(date_prices, list):
+            next_prices = []
+
+            for price in date_prices:
+                refs = _date_ref_values(price if isinstance(price, dict) else {})
+                if refs & removed_refs:
+                    changed = True
+                    continue
+
+                if isinstance(price, dict) and not _is_departure_date_actual(price, today):
+                    changed = True
+                    continue
+
+                next_prices.append(price)
+
+            if len(next_prices) != len(date_prices):
+                room["date_prices"] = next_prices
+                changed = True
+
+        unavailable_dates = room.get("unavailable_dates")
+        if isinstance(unavailable_dates, list):
+            next_unavailable = [
+                value
+                for value in unavailable_dates
+                if _as_text(value) not in removed_refs
+            ]
+
+            if len(next_unavailable) != len(unavailable_dates):
+                room["unavailable_dates"] = next_unavailable
+                changed = True
+
+    return changed
+
+
+def _clean_stale_hotel_date_links(hotels: list, removed_refs: set[str], today: date) -> bool:
+    changed = False
+
+    for hotel in hotels or []:
+        if not isinstance(hotel, dict):
+            continue
+
+        rooms = hotel.get("rooms")
+        if isinstance(rooms, list):
+            changed = _clean_stale_room_date_links(rooms, removed_refs, today) or changed
+
+    return changed
+
+
+def _prune_tour_departure_dates(tour: dict, today: date | None = None) -> bool:
+    if today is None:
+        today = date.today()
+
+    changed = False
+
+    def prune_dates(dates: list | None) -> tuple[list, set[str]]:
+        nonlocal changed
+
+        if not isinstance(dates, list):
+            return [], set()
+
+        next_dates = []
+        removed_refs: set[str] = set()
+
+        for item in dates:
+            if isinstance(item, dict) and not _is_departure_date_actual(item, today):
+                removed_refs.update(_date_ref_values(item))
+                changed = True
+                continue
+
+            next_dates.append(item)
+
+        return next_dates, removed_refs
+
+    if isinstance(tour.get("dates"), list):
+        next_dates, removed_refs = prune_dates(tour.get("dates"))
+        if len(next_dates) != len(tour.get("dates") or []):
+            tour["dates"] = next_dates
+        if removed_refs:
+            changed = _clean_stale_hotel_date_links(
+                tour.get("hotels") if isinstance(tour.get("hotels"), list) else [],
+                removed_refs,
+                today,
+            ) or changed
+
+    chains = tour.get("chains")
+    if isinstance(chains, list):
+        for chain in chains:
+            if not isinstance(chain, dict):
+                continue
+
+            next_dates, removed_refs = prune_dates(chain.get("dates"))
+            if isinstance(chain.get("dates"), list) and len(next_dates) != len(chain.get("dates") or []):
+                chain["dates"] = next_dates
+
+            if removed_refs:
+                changed = _clean_stale_hotel_date_links(
+                    chain.get("hotels") if isinstance(chain.get("hotels"), list) else [],
+                    removed_refs,
+                    today,
+                ) or changed
+
+    return changed
+
+
+def _prune_all_tour_departure_dates() -> list[dict]:
+    tours = list_items("tours")
+    today = date.today()
+    changed = False
+
+    for tour in tours:
+        if isinstance(tour, dict):
+            changed = _prune_tour_departure_dates(tour, today) or changed
+
+    if changed:
+        save("tours", tours)
+        logger.info("Stale tour departure dates were pruned")
+
+    return tours
+
+
+def _is_tour_expired(tour: dict) -> bool:
     start_dates = [
         parsed
         for parsed in (_parse_date(d.get("start")) for d in _tour_dates(tour))
@@ -368,7 +536,7 @@ def _is_tour_expired(tour: dict) -> bool:
     if not start_dates:
         return False
 
-    return not any(start_date > tomorrow for start_date in start_dates)
+    return not any(start_date >= date.today() for start_date in start_dates)
 
 
 def _safe_frontend_file(full_path: str) -> FileResponse | None:
@@ -414,7 +582,9 @@ async def get_settings():
 
 @api.get("/tours")
 async def get_tours(region: str | None = None, badge: str | None = None):
-    items = [t for t in list_items("tours") if t.get("active", True)]
+    # Public reads also clean stale departure dates from JSON storage.
+    # A past date inside a chain is deleted, but the tour itself remains.
+    items = [t for t in _prune_all_tour_departure_dates() if t.get("active", True)]
 
     if region:
         items = [t for t in items if t.get("region_slug") == region]
@@ -428,23 +598,14 @@ async def get_tours(region: str | None = None, badge: str | None = None):
 
 @api.get("/tours/{slug}")
 async def get_tour(slug: str):
-    tour = get_by("tours", "slug", slug)
+    tours = _prune_all_tour_departure_dates()
+    tour = next((t for t in tours if t.get("slug") == slug), None)
 
-    if not tour or not tour.get("active", True) or _is_tour_expired(tour):
+    if not tour or not tour.get("active", True):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
     return tour
 
-
-@api.get("/specialists")
-async def get_specialists(region: str | None = None):
-    items = [s for s in list_items("specialists") if s.get("active", True)]
-
-    if region:
-        items = [s for s in items if region in (s.get("regions") or [])]
-
-    items.sort(key=_order_value)
-    return items
 
 
 @api.get("/reviews")
@@ -583,11 +744,18 @@ def _crud_create(name: str, payload: dict) -> dict:
     if "active" not in item:
         item["active"] = True
 
+    if name == "tours":
+        _prune_tour_departure_dates(item)
+
     add_item(name, item)
     return item
 
 
 def _crud_update(name: str, item_id: str, payload: dict) -> dict:
+    if name == "tours":
+        payload = {**payload}
+        _prune_tour_departure_dates(payload)
+
     updated = update_item(name, item_id, payload)
 
     if not updated:
@@ -607,7 +775,6 @@ def _crud_delete(name: str, item_id: str) -> dict:
 
 COLLECTIONS = [
     "tours",
-    "specialists",
     "reviews",
     "articles",
     "faq",
@@ -651,6 +818,9 @@ async def admin_leads_delete(item_id: str, current=Depends(get_current_admin)):
 async def admin_list(collection: str, current=Depends(get_current_admin)):
     if collection not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
+
+    if collection == "tours":
+        return _prune_all_tour_departure_dates()
 
     return list_items(collection)
 
