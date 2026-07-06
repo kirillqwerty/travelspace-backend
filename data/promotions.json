@@ -1,20 +1,32 @@
 [
   {
     "id": "be086614-623d-42dc-9eb7-43fd7c783db5",
-    "title": "Раннее бронирование Грузии −10%",
-    "image": "https://images.pexels.com/photos/11815773/pexels-photo-11815773.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
-    "description": "Бронируйте тур в Кобулети до 1 марта 2026 года и получите скидку 10% на любой заезд лета.",
-    "valid_until": "2026-03-01",
+    "title": "Компании туристов от 4х человек!",
+    "image": "/uploads/9c181833-f94b-428c-9d1d-668b61988ea0.jpg",
+    "description": "Для больших компаний у нас всегда существуют гибкие условия, которые зависят от выбранного тура и его даты! Сообщите, пожалуйста, нам эти данные и мы подготовим для Вас наше скидочное предложение!",
+    "valid_until": "2026-12-31",
     "related_tour_slug": "gruziya-kobuleti-10-dney",
-    "active": true
+    "active": true,
+    "related_tour_slugs": []
   },
   {
     "id": "99013114-9d09-4f4f-9063-69645c38bc62",
-    "title": "Третий в номер -50%",
-    "image": "https://images.pexels.com/photos/97083/pexels-photo-97083.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
-    "description": "Для семей с детьми: третий гость в номере оплачивает только 50% стоимости тура.",
+    "title": "День Рождения в туре?)",
+    "image": "/uploads/6047bcdb-35a5-4872-93db-d3dd0d5c58a6.jpg",
+    "description": "Если Вы собираетесь отпраздновать свой День рождения в нашем туре - это действительно крутое событие, которое не может быть без дополнительных бонусов!",
     "valid_until": "2026-08-31",
     "related_tour_slug": "",
-    "active": true
+    "active": true,
+    "related_tour_slugs": []
+  },
+  {
+    "title": "Вы ведёте активную социальную жизнь?)",
+    "image": "/uploads/5fb5ae2c-5c0d-4d29-a41d-fcee1916c378.jpg",
+    "description": "Мы всегда готовы обратить внимание на сильные качества наших туристов и предложить задействовать Ваши способности в планируемом путешествии!",
+    "valid_until": "",
+    "related_tour_slugs": [],
+    "active": true,
+    "id": "30155bac-8bfb-459f-8dd0-5a7b5775b820",
+    "related_tour_slug": ""
   }
 ]

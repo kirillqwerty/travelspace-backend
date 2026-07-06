@@ -1,7 +1,7 @@
 [
   {
     "id": "193485b1-c1e0-4de8-9121-6c264d46a247",
-    "name": "Анна Ковалёва",
+    "name": "Менеджер 1",
     "role": "Менеджер по Грузии и Кавказу",
     "phone": "+375 29 636-99-11",
     "phone_link": "+375296369911",
@@ -10,15 +10,15 @@
       "dagestan"
     ],
     "viber": "+375296369911",
-    "telegram": "anna_travelspace",
+    "telegram": "mng_travelspace",
     "whatsapp": "+375296369911",
-    "photo": "",
+    "photo": "/uploads/4f5e5ac6-ac21-4ac2-be0d-384ffa68c5b2.jpg",
     "order": 1,
     "active": true
   },
   {
     "id": "854cb6b5-51bf-415b-9f94-e9b78911beb1",
-    "name": "Дмитрий Сахаров",
+    "name": "Менеджер  2",
     "role": "Менеджер по России",
     "phone": "+375 29 636-22-99",
     "phone_link": "+375296362299",
@@ -29,13 +29,13 @@
     "viber": "+375296362299",
     "telegram": "dmitry_travelspace",
     "whatsapp": "+375296362299",
-    "photo": "",
+    "photo": "/uploads/3ee57f00-2cab-405f-8d0f-4b5826846a7f.jpg",
     "order": 2,
     "active": true
   },
   {
     "id": "d67aaaf0-2264-4844-a9ee-2d5bfab04908",
-    "name": "Ольга Михайлова",
+    "name": "Менеджер 3",
     "role": "Старший менеджер · Агентствам",
     "phone": "+375 29 345-67-89",
     "phone_link": "+375293456789",
@@ -48,7 +48,7 @@
     "viber": "+375293456789",
     "telegram": "olga_travelspace",
     "whatsapp": "+375293456789",
-    "photo": "",
+    "photo": "/uploads/c6b8e547-d19a-4a57-8d7a-8c149719fa85.jpg",
     "order": 3,
     "active": true
   }

@@ -2,23 +2,23 @@
   "company_name": "TRAVELSPACE — Туроператор из Минска",
   "company_short": "TRAVELSPACE",
   "phone": "+375 29 636-99-11",
-  "phone_link": "+375296369911",
+  "phone_link": "6369911",
   "email": "info@travel-space.by",
-  "lead_email": "an.tonny.office@gmail.com",
-  "address": "пр-т Независимости 58, 220005, Минск",
-  "work_hours": "Ежедневно с 10:00 до 19:00",
-  "unp": "100000000",
-  "legal_name": "ООО \"Туроператор\" (демо-данные)",
+  "lead_email": "infotravelspaceby@mail.amocrm.ru",
+  "address": "Минск, площадь Свободы 23, офис 16а,",
+  "work_hours": "по будням с 11:00 до 19:00",
+  "unp": "193738609",
+  "legal_name": "ООО \"Пространство Путешествий\"",
   "header_phones": [
     {
-      "label": "Грузия и Дагестан",
+      "label": "Грузия",
       "phone": "636-99-11",
-      "link": "+375296369911"
+      "link": "6369911"
     },
     {
-      "label": "Питер и Карелия",
+      "label": "Дагестан, Питер и Карелия",
       "phone": "636-22-99",
-      "link": "+375296362299"
+      "link": "6362299"
     }
   ],
   "messengers": {
@@ -56,5 +56,80 @@
       "color": "#25D366",
       "active": true
     }
-  ]
+  ],
+  "seo_default_image": "/og-image.jpg",
+  "seo_pages": {
+    "home": {
+      "path": "/",
+      "title": "TRAVELSPACE — автобусные туры из Минска",
+      "description": "Автобусные туры из Минска в Грузию, Дагестан, Санкт-Петербург и Карелию. Продуманные программы, заботливые гиды и понятная цена.",
+      "image": "/og-image.jpg"
+    },
+    "tours": {
+      "path": "/tours",
+      "title": "Каталог автобусных туров из Минска | TRAVELSPACE",
+      "description": "Актуальные автобусные туры из Минска: даты, цены, программа, отели и заявки онлайн.",
+      "image": "/og-image.jpg"
+    },
+    "about": {
+      "path": "/about",
+      "title": "О компании TRAVELSPACE — туроператор из Минска",
+      "description": "TRAVELSPACE разрабатывает автобусные туры из Минска, сопровождает группы и помогает туристам путешествовать спокойно.",
+      "image": "/og-image.jpg"
+    },
+    "contacts": {
+      "path": "/contacts",
+      "title": "Контакты TRAVELSPACE",
+      "description": "Телефоны, email, офис, режим работы и форма заявки на подбор тура.",
+      "image": "/og-image.jpg"
+    },
+    "faq": {
+      "path": "/faq",
+      "title": "Частые вопросы о турах | TRAVELSPACE",
+      "description": "Ответы на частые вопросы о бронировании, оплате, документах и автобусных турах TRAVELSPACE.",
+      "image": "/og-image.jpg"
+    },
+    "promotions": {
+      "path": "/promotions",
+      "title": "Акции и спецпредложения на туры | TRAVELSPACE",
+      "description": "Актуальные акции, скидки и спецпредложения на автобусные туры из Минска.",
+      "image": "/og-image.jpg"
+    },
+    "reviews": {
+      "path": "/reviews",
+      "title": "Отзывы туристов | TRAVELSPACE",
+      "description": "Отзывы туристов о поездках, маршрутах и работе TRAVELSPACE.",
+      "image": "/og-image.jpg"
+    },
+    "blog": {
+      "path": "/blog",
+      "title": "Блог о путешествиях | TRAVELSPACE",
+      "description": "Полезные статьи, чек-листы и советы для комфортных путешествий и автобусных туров.",
+      "image": "/og-image.jpg"
+    },
+    "agencies": {
+      "path": "/agencies",
+      "title": "Агентствам — сотрудничество с TRAVELSPACE",
+      "description": "Условия сотрудничества для турагентств: блоки мест, материалы, поддержка менеджера и прозрачные условия.",
+      "image": "/og-image.jpg"
+    },
+    "payment": {
+      "path": "/payment",
+      "title": "Оплата тура через ЕРИП | TRAVELSPACE",
+      "description": "Как оплатить тур TRAVELSPACE через ЕРИП после бронирования и заключения договора.",
+      "image": "/og-image.jpg"
+    },
+    "legal": {
+      "path": "/legal",
+      "title": "Юридическая информация | TRAVELSPACE",
+      "description": "Политика конфиденциальности, согласие на обработку персональных данных, договор и реквизиты TRAVELSPACE.",
+      "image": "/og-image.jpg"
+    }
+  },
+  "gtm_id": "",
+  "google_analytics_id": "G-RFW4TK6SCS",
+  "yandex_metrika_id": "44886274",
+  "facebook_pixel_id": "2151833794921718",
+  "tiktok_pixel_id": "",
+  "map_url": "https://yandex.by/maps/157/minsk/house/Zk4YcwJnSkYOQFtpfXVxcnpgZQ==/?ll=27.557339%2C53.903631&z=16"
 }

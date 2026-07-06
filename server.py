@@ -15,6 +15,8 @@ import os
 import re
 import smtplib
 import uuid
+from copy import deepcopy
+from urllib.parse import quote
 from datetime import datetime, timezone, date, timedelta
 from email.message import EmailMessage
 from html import escape
@@ -67,6 +69,7 @@ from storage import (
     update_item,
 )
 from tracking import send_server_conversion_events
+from tour_program_pdf import build_tour_program_pdf
 
 
 logging.basicConfig(
@@ -607,6 +610,37 @@ async def get_tour(slug: str):
     return tour
 
 
+@api.get("/tours/{slug}/program.pdf")
+async def download_tour_program(slug: str):
+    tours = _prune_all_tour_departure_dates()
+    tour = next((t for t in tours if t.get("slug") == slug), None)
+
+    if not tour or not tour.get("active", True):
+        raise HTTPException(status_code=404, detail="Тур не найден")
+
+    try:
+        pdf = build_tour_program_pdf(
+            tour,
+            settings=load("settings", default={}),
+            upload_dir=UPLOAD_DIR,
+        )
+    except Exception:
+        logger.exception("Tour program PDF generation failed: slug=%s", slug)
+        raise HTTPException(status_code=500, detail="Не удалось сформировать PDF")
+
+    filename = f"tour-program-{slug}.pdf"
+
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{filename}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
+    )
+
 
 @api.get("/reviews")
 async def get_reviews():
@@ -664,9 +698,22 @@ async def create_lead(
     lead["id"] = str(uuid.uuid4())
     lead["status"] = "new"
     lead["created_at"] = _now()
-    lead["ip"] = request.client.host if request.client else None
+
+    forwarded_for = request.headers.get("x-forwarded-for")
+    lead["ip"] = (
+        forwarded_for.split(",", 1)[0].strip()
+        if forwarded_for
+        else request.client.host if request.client else None
+    )
     lead["user_agent"] = request.headers.get("user-agent")
     lead["page_url"] = lead.get("page_url") or request.headers.get("referer")
+
+    click_ids = lead.get("click_ids") if isinstance(lead.get("click_ids"), dict) else {}
+    if request.cookies.get("_fbp") and not click_ids.get("fbp"):
+        click_ids["fbp"] = request.cookies.get("_fbp")
+    if request.cookies.get("_fbc") and not click_ids.get("fbc"):
+        click_ids["fbc"] = request.cookies.get("_fbc")
+    lead["click_ids"] = click_ids
 
     add_item("leads", lead)
 
@@ -736,6 +783,44 @@ async def admin_upload_file(
 
 
 # ---------- Admin CRUD -----------------------------------------------------
+
+
+def _make_unique_slug(base_slug: str, existing_slugs: set[str]) -> str:
+    base = re.sub(r"[^a-zA-Z0-9-]+", "-", _as_text(base_slug).lower()).strip("-")
+    base = re.sub(r"-+", "-", base) or "tour-copy"
+
+    candidate = base
+    index = 2
+
+    while candidate in existing_slugs:
+        candidate = f"{base}-{index}"
+        index += 1
+
+    return candidate
+
+
+def _duplicate_tour(item_id: str) -> dict:
+    tours = list_items("tours")
+    source = next((tour for tour in tours if tour.get("id") == item_id), None)
+
+    if not source:
+        raise HTTPException(status_code=404, detail="Тур не найден")
+
+    existing_slugs = {str(tour.get("slug") or "") for tour in tours}
+    base_slug = f"{source.get('slug') or 'tour'}-copy"
+
+    item = deepcopy(source)
+    item["id"] = str(uuid.uuid4())
+    item["title"] = f"{_as_text(source.get('title')) or 'Тур'} (копия)"
+    item["slug"] = _make_unique_slug(base_slug, existing_slugs)
+    item["active"] = False
+    item["hidden"] = True
+    item["order"] = _order_value(source) + 1
+    item["created_at"] = _now()
+    item["updated_at"] = _now()
+
+    add_item("tours", item)
+    return item
 
 
 def _crud_create(name: str, payload: dict) -> dict:
@@ -812,6 +897,14 @@ async def admin_leads_update(
 @api.delete("/admin/leads/{item_id}")
 async def admin_leads_delete(item_id: str, current=Depends(get_current_admin)):
     return _crud_delete("leads", item_id)
+
+
+@api.post("/admin/tours/{item_id}/duplicate")
+async def admin_duplicate_tour(
+    item_id: str,
+    current=Depends(get_current_admin),
+):
+    return _duplicate_tour(item_id)
 
 
 @api.get("/admin/{collection}")

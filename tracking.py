@@ -47,9 +47,19 @@ def _event_id(lead: dict) -> str:
     return _first(lead.get("event_id"), lead.get("id"))
 
 
+def _env_enabled(name: str) -> bool:
+    return _text(os.environ.get(name)).lower() in {"1", "true", "yes", "on"}
+
+
 def send_server_conversion_events(lead: dict) -> None:
-    """Send server-side events in the background after lead creation."""
-    _send_meta_lead(lead)
+    """Send server-side events in the background after lead creation.
+
+    Meta CAPI is disabled by default to keep exactly one Meta conversion signal
+    for a lead: the browser Lead event from the /thanks page. Enable it only
+    when Pixel+CAPI deduplication is intentionally configured in Meta.
+    """
+    if _env_enabled("META_CAPI_ENABLED") or _env_enabled("FACEBOOK_CAPI_ENABLED"):
+        _send_meta_lead(lead)
     _send_tiktok_lead(lead)
 
 
