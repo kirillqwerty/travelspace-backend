@@ -10,17 +10,20 @@ FastAPI serves the React build and injects runtime SEO meta for page URLs.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
 import smtplib
 import uuid
+from contextlib import suppress
 from copy import deepcopy
 from urllib.parse import quote
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone, date, timedelta, time as datetime_time
 from email.message import EmailMessage
 from html import escape
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 
@@ -81,6 +84,13 @@ logger = logging.getLogger("travelspace")
 
 app = FastAPI(title="Tour Operator API")
 api = APIRouter(prefix="/api")
+
+
+# All tour-date retention rules use Belarus local time (UTC+3).
+BELARUS_TIMEZONE = ZoneInfo("Europe/Minsk")
+DEFAULT_AUTO_DELETE_DAYS_BEFORE = 0
+MAX_AUTO_DELETE_DAYS_BEFORE = 3650
+_tour_date_cleanup_task: asyncio.Task | None = None
 
 
 def _parse_cors_origins() -> list[str]:
@@ -349,6 +359,27 @@ def _parse_date(value: str | None) -> date | None:
         return None
 
 
+def _belarus_today() -> date:
+    return datetime.now(BELARUS_TIMEZONE).date()
+
+
+def _tour_auto_delete_days_before(tour: dict | None) -> int:
+    if not isinstance(tour, dict):
+        return DEFAULT_AUTO_DELETE_DAYS_BEFORE
+
+    raw_value = tour.get(
+        "auto_delete_dates_days_before",
+        DEFAULT_AUTO_DELETE_DAYS_BEFORE,
+    )
+
+    try:
+        days_before = int(raw_value)
+    except (TypeError, ValueError):
+        days_before = DEFAULT_AUTO_DELETE_DAYS_BEFORE
+
+    return max(0, min(days_before, MAX_AUTO_DELETE_DAYS_BEFORE))
+
+
 def _tour_dates(tour: dict) -> list[dict]:
     dates = list(tour.get("dates") or [])
 
@@ -376,32 +407,43 @@ def _date_ref_values(item: dict | None) -> set[str]:
     return {value for value in values if value}
 
 
-def _is_departure_date_actual(item: dict | None, today: date | None = None) -> bool:
+def _is_departure_date_actual(
+    item: dict | None,
+    today: date | None = None,
+    days_before: int = DEFAULT_AUTO_DELETE_DAYS_BEFORE,
+) -> bool:
     """Return True when a departure date can still be shown for booking.
 
-    We use the departure start date, not the end date: once the tour has
-    already departed, that specific departure must disappear, but the tour
-    itself must stay active if it has other future dates.
+    A date is removed at 00:00 Belarus time on
+    ``start date - auto_delete_dates_days_before``. For example, a 30 July
+    departure with a five-day setting is removed on 25 July at 00:00.
     """
 
     if today is None:
-        today = date.today()
+        today = _belarus_today()
 
     if not isinstance(item, dict):
         return True
 
+    days_before = max(0, int(days_before or 0))
+
     start = _parse_date(_as_text(item.get("start") or item.get("date_start")))
     if start:
-        return start >= today
+        return today < start - timedelta(days=days_before)
 
     end = _parse_date(_as_text(item.get("end")))
     if end:
-        return end >= today
+        return today < end - timedelta(days=days_before)
 
     return True
 
 
-def _clean_stale_room_date_links(rooms: list, removed_refs: set[str], today: date) -> bool:
+def _clean_stale_room_date_links(
+    rooms: list,
+    removed_refs: set[str],
+    today: date,
+    days_before: int,
+) -> bool:
     changed = False
 
     for room in rooms or []:
@@ -418,7 +460,11 @@ def _clean_stale_room_date_links(rooms: list, removed_refs: set[str], today: dat
                     changed = True
                     continue
 
-                if isinstance(price, dict) and not _is_departure_date_actual(price, today):
+                if isinstance(price, dict) and not _is_departure_date_actual(
+                    price,
+                    today,
+                    days_before,
+                ):
                     changed = True
                     continue
 
@@ -443,7 +489,12 @@ def _clean_stale_room_date_links(rooms: list, removed_refs: set[str], today: dat
     return changed
 
 
-def _clean_stale_hotel_date_links(hotels: list, removed_refs: set[str], today: date) -> bool:
+def _clean_stale_hotel_date_links(
+    hotels: list,
+    removed_refs: set[str],
+    today: date,
+    days_before: int,
+) -> bool:
     changed = False
 
     for hotel in hotels or []:
@@ -452,16 +503,22 @@ def _clean_stale_hotel_date_links(hotels: list, removed_refs: set[str], today: d
 
         rooms = hotel.get("rooms")
         if isinstance(rooms, list):
-            changed = _clean_stale_room_date_links(rooms, removed_refs, today) or changed
+            changed = _clean_stale_room_date_links(
+                rooms,
+                removed_refs,
+                today,
+                days_before,
+            ) or changed
 
     return changed
 
 
 def _prune_tour_departure_dates(tour: dict, today: date | None = None) -> bool:
     if today is None:
-        today = date.today()
+        today = _belarus_today()
 
     changed = False
+    days_before = _tour_auto_delete_days_before(tour)
 
     def prune_dates(dates: list | None) -> tuple[list, set[str]]:
         nonlocal changed
@@ -473,7 +530,11 @@ def _prune_tour_departure_dates(tour: dict, today: date | None = None) -> bool:
         removed_refs: set[str] = set()
 
         for item in dates:
-            if isinstance(item, dict) and not _is_departure_date_actual(item, today):
+            if isinstance(item, dict) and not _is_departure_date_actual(
+                item,
+                today,
+                days_before,
+            ):
                 removed_refs.update(_date_ref_values(item))
                 changed = True
                 continue
@@ -491,6 +552,7 @@ def _prune_tour_departure_dates(tour: dict, today: date | None = None) -> bool:
                 tour.get("hotels") if isinstance(tour.get("hotels"), list) else [],
                 removed_refs,
                 today,
+                days_before,
             ) or changed
 
     chains = tour.get("chains")
@@ -508,6 +570,7 @@ def _prune_tour_departure_dates(tour: dict, today: date | None = None) -> bool:
                     chain.get("hotels") if isinstance(chain.get("hotels"), list) else [],
                     removed_refs,
                     today,
+                    days_before,
                 ) or changed
 
     return changed
@@ -515,7 +578,7 @@ def _prune_tour_departure_dates(tour: dict, today: date | None = None) -> bool:
 
 def _prune_all_tour_departure_dates() -> list[dict]:
     tours = list_items("tours")
-    today = date.today()
+    today = _belarus_today()
     changed = False
 
     for tour in tours:
@@ -529,6 +592,29 @@ def _prune_all_tour_departure_dates() -> list[dict]:
     return tours
 
 
+def _seconds_until_next_belarus_midnight() -> float:
+    now = datetime.now(BELARUS_TIMEZONE)
+    next_day = now.date() + timedelta(days=1)
+    next_midnight = datetime.combine(
+        next_day,
+        datetime_time.min,
+        tzinfo=BELARUS_TIMEZONE,
+    )
+
+    return max(1.0, (next_midnight - now).total_seconds())
+
+
+async def _run_tour_date_cleanup_daily() -> None:
+    while True:
+        await asyncio.sleep(_seconds_until_next_belarus_midnight())
+
+        try:
+            _prune_all_tour_departure_dates()
+            logger.info("Scheduled tour date cleanup completed (Europe/Minsk).")
+        except Exception:
+            logger.exception("Scheduled tour date cleanup failed")
+
+
 def _is_tour_expired(tour: dict) -> bool:
     start_dates = [
         parsed
@@ -539,7 +625,7 @@ def _is_tour_expired(tour: dict) -> bool:
     if not start_dates:
         return False
 
-    return not any(start_date >= date.today() for start_date in start_dates)
+    return not any(start_date >= _belarus_today() for start_date in start_dates)
 
 
 def _safe_frontend_file(full_path: str) -> FileResponse | None:
@@ -567,6 +653,145 @@ def _safe_frontend_file(full_path: str) -> FileResponse | None:
         return None
 
     return FileResponse(str(requested_file))
+
+
+
+# ---------- Compact PDF programs ------------------------------------------
+
+
+TOUR_PDF_PROGRAMS_COLLECTION = "tour_pdf_programs"
+
+
+def _default_tour_pdf_program(tour: dict) -> dict:
+    """Build a compact editable draft from the full tour program."""
+    days = []
+
+    for index, day in enumerate(tour.get("program") or [], start=1):
+        if not isinstance(day, dict):
+            continue
+
+        days.append(
+            {
+                "id": _as_text(day.get("id")) or str(uuid.uuid4()),
+                "day": _as_text(day.get("day")) or str(index),
+                "title": _as_text(day.get("title")) or f"День {index}",
+                "description": _as_text(
+                    day.get("description") or day.get("notes")
+                ),
+            }
+        )
+
+    return {
+        "intro": _as_text(
+            tour.get("tagline")
+            or tour.get("short_description")
+            or tour.get("description")
+        ),
+        "days": days,
+        "included": [
+            _as_text(item)
+            for item in (tour.get("included") or [])
+            if _as_text(item)
+        ],
+        "excluded": [
+            _as_text(item)
+            for item in (tour.get("excluded") or [])
+            if _as_text(item)
+        ],
+        "important_info": [
+            _as_text(item)
+            for item in (tour.get("important_info") or [])
+            if _as_text(item)
+        ],
+        "show_info_blocks": True,
+        "source": "tour_program",
+    }
+
+
+def _normalize_tour_pdf_program(payload: dict, tour: dict) -> dict:
+    fallback = _default_tour_pdf_program(tour)
+    raw_days = payload.get("days") if isinstance(payload.get("days"), list) else []
+    days = []
+
+    for index, day in enumerate(raw_days, start=1):
+        if not isinstance(day, dict):
+            continue
+
+        title = _as_text(day.get("title"))
+        description = _as_text(day.get("description") or day.get("text"))
+        day_number = _as_text(day.get("day")) or str(index)
+
+        if not title and not description:
+            continue
+
+        days.append(
+            {
+                "id": _as_text(day.get("id")) or str(uuid.uuid4()),
+                "day": day_number,
+                "title": title or f"День {day_number}",
+                "description": description,
+            }
+        )
+
+    def _strings(key: str) -> list[str]:
+        value = payload.get(key)
+
+        if not isinstance(value, list):
+            return fallback[key]
+
+        return [_as_text(item) for item in value if _as_text(item)]
+
+    return {
+        "intro": _as_text(payload.get("intro")),
+        "days": days,
+        "included": _strings("included"),
+        "excluded": _strings("excluded"),
+        "important_info": _strings("important_info"),
+        "show_info_blocks": payload.get("show_info_blocks") is not False,
+        "source": "admin",
+    }
+
+
+def _tour_pdf_program_record(tour_id: str | None) -> dict | None:
+    if not tour_id:
+        return None
+
+    return next(
+        (
+            item
+            for item in list_items(TOUR_PDF_PROGRAMS_COLLECTION)
+            if item.get("tour_id") == tour_id
+        ),
+        None,
+    )
+
+
+def _saved_tour_pdf_program(tour_id: str | None) -> dict | None:
+    record = _tour_pdf_program_record(tour_id)
+    if not record:
+        return None
+
+    return {
+        "intro": record.get("intro") or "",
+        "days": record.get("days") if isinstance(record.get("days"), list) else [],
+        "included": (
+            record.get("included")
+            if isinstance(record.get("included"), list)
+            else []
+        ),
+        "excluded": (
+            record.get("excluded")
+            if isinstance(record.get("excluded"), list)
+            else []
+        ),
+        "important_info": (
+            record.get("important_info")
+            if isinstance(record.get("important_info"), list)
+            else []
+        ),
+        "show_info_blocks": record.get("show_info_blocks") is not False,
+        "source": "admin",
+    }
 
 
 # ---------- Public endpoints ----------------------------------------------
@@ -619,10 +844,15 @@ async def download_tour_program(slug: str):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
     try:
+        program_config = (
+            _saved_tour_pdf_program(tour.get("id"))
+            or _default_tour_pdf_program(tour)
+        )
         pdf = build_tour_program_pdf(
             tour,
             settings=load("settings", default={}),
             upload_dir=UPLOAD_DIR,
+            program_config=program_config,
         )
     except Exception:
         logger.exception("Tour program PDF generation failed: slug=%s", slug)
@@ -799,6 +1029,80 @@ def _make_unique_slug(base_slug: str, existing_slugs: set[str]) -> str:
     return candidate
 
 
+
+@api.get("/admin/tours/{item_id}/pdf-program")
+async def admin_get_tour_pdf_program(
+    item_id: str,
+    current=Depends(get_current_admin),
+):
+    tour = next(
+        (item for item in list_items("tours") if item.get("id") == item_id),
+        None,
+    )
+
+    if not tour:
+        raise HTTPException(status_code=404, detail="Тур не найден")
+
+    generated_program = _default_tour_pdf_program(tour)
+    saved_program = _saved_tour_pdf_program(item_id)
+
+    return {
+        "tour_id": tour.get("id"),
+        "title": tour.get("title"),
+        "slug": tour.get("slug"),
+        "pdf_program": saved_program or generated_program,
+        "source_program": generated_program,
+        "is_generated": saved_program is None,
+    }
+
+
+@api.put("/admin/tours/{item_id}/pdf-program")
+async def admin_update_tour_pdf_program(
+    item_id: str,
+    payload: dict,
+    current=Depends(get_current_admin),
+):
+    tour = next(
+        (item for item in list_items("tours") if item.get("id") == item_id),
+        None,
+    )
+
+    if not tour:
+        raise HTTPException(status_code=404, detail="Тур не найден")
+
+    pdf_program = _normalize_tour_pdf_program(payload, tour)
+    existing = _tour_pdf_program_record(item_id)
+    now = _now()
+
+    if existing:
+        updated = update_item(
+            TOUR_PDF_PROGRAMS_COLLECTION,
+            existing.get("id"),
+            {
+                **pdf_program,
+                "tour_id": item_id,
+                "updated_at": now,
+            },
+        )
+    else:
+        updated = add_item(
+            TOUR_PDF_PROGRAMS_COLLECTION,
+            {
+                "id": str(uuid.uuid4()),
+                "tour_id": item_id,
+                **pdf_program,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+
+    return {
+        "ok": True,
+        "pdf_program": _saved_tour_pdf_program(item_id) or pdf_program,
+        "record_id": updated.get("id") if updated else None,
+    }
+
+
 def _duplicate_tour(item_id: str) -> dict:
     tours = list_items("tours")
     source = next((tour for tour in tours if tour.get("id") == item_id), None)
@@ -854,6 +1158,11 @@ def _crud_delete(name: str, item_id: str) -> dict:
 
     if not ok:
         raise HTTPException(status_code=404, detail="Не найдено")
+
+    if name == "tours":
+        program = _tour_pdf_program_record(item_id)
+        if program:
+            delete_item(TOUR_PDF_PROGRAMS_COLLECTION, program.get("id"))
 
     return _ok()
 
@@ -1056,10 +1365,35 @@ async def serve_react_app(full_path: str):
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    global _tour_date_cleanup_task
+
     seed_admin()
     run_seed()
+    _prune_all_tour_departure_dates()
+
+    if _tour_date_cleanup_task is None or _tour_date_cleanup_task.done():
+        _tour_date_cleanup_task = asyncio.create_task(
+            _run_tour_date_cleanup_daily(),
+            name="tour-date-cleanup",
+        )
 
     logger.info("Tour operator API started.")
+    logger.info("Tour date cleanup timezone: Europe/Minsk (UTC+3)")
     logger.info("Data dir: %s", str(STORAGE_DATA_DIR))
     logger.info("Uploads dir: %s", str(UPLOAD_DIR))
     logger.info("Frontend build dir: %s", str(FRONTEND_BUILD_DIR))
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    global _tour_date_cleanup_task
+
+    if _tour_date_cleanup_task is None:
+        return
+
+    _tour_date_cleanup_task.cancel()
+
+    with suppress(asyncio.CancelledError):
+        await _tour_date_cleanup_task
+
+    _tour_date_cleanup_task = None

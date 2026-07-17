@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import unicodedata
 from datetime import date, datetime
@@ -30,35 +31,53 @@ SOFT_ORANGE = colors.HexColor("#FFEDD5")
 FONT_REGULAR = "Helvetica"
 FONT_BOLD = "Helvetica-Bold"
 
+MODULE_DIR = Path(__file__).resolve().parent
+FONT_DIR = MODULE_DIR / "fonts"
 
-CYRILLIC_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
-    "/usr/local/share/fonts/DejaVuSans.ttf",
-    "C:/Windows/Fonts/arial.ttf",
-]
-CYRILLIC_BOLD_FONT_CANDIDATES = [
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
-    "/usr/local/share/fonts/DejaVuSans-Bold.ttf",
-    "C:/Windows/Fonts/arialbd.ttf",
+CYRILLIC_FONT_PAIRS = [
+    # The first pair is shipped with the backend, so PDF generation does not
+    # depend on fonts installed in the hosting container.
+    (FONT_DIR / "DejaVuSans.ttf", FONT_DIR / "DejaVuSans-Bold.ttf"),
+    # Optional explicit paths for non-standard hosting environments.
+    (
+        Path(os.environ["PDF_FONT_REGULAR"]).expanduser()
+        if os.environ.get("PDF_FONT_REGULAR")
+        else None,
+        Path(os.environ["PDF_FONT_BOLD"]).expanduser()
+        if os.environ.get("PDF_FONT_BOLD")
+        else None,
+    ),
+    (Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")),
+    (Path("/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf")),
+    (Path("/usr/share/fonts/dejavu/DejaVuSans.ttf"), Path("/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf")),
+    (Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"), Path("/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf")),
+    (Path("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"), Path("/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf")),
+    (Path("/usr/local/share/fonts/DejaVuSans.ttf"), Path("/usr/local/share/fonts/DejaVuSans-Bold.ttf")),
+    (Path("C:/Windows/Fonts/arial.ttf"), Path("C:/Windows/Fonts/arialbd.ttf")),
 ]
 
 
 def _register_fonts() -> tuple[str, str]:
-    regular = next((Path(p) for p in CYRILLIC_FONT_CANDIDATES if Path(p).exists()), None)
-    bold = next((Path(p) for p in CYRILLIC_BOLD_FONT_CANDIDATES if Path(p).exists()), None)
+    errors: list[str] = []
 
-    if regular:
+    for regular, bold in CYRILLIC_FONT_PAIRS:
+        if regular is None or not regular.is_file():
+            continue
+
+        bold = bold if bold is not None and bold.is_file() else regular
         try:
             pdfmetrics.registerFont(TTFont("TravelspaceSans", str(regular)))
-            if bold:
-                pdfmetrics.registerFont(TTFont("TravelspaceSans-Bold", str(bold)))
-            return "TravelspaceSans", "TravelspaceSans-Bold" if bold else "TravelspaceSans"
-        except Exception:
-            return FONT_REGULAR, FONT_BOLD
+            pdfmetrics.registerFont(TTFont("TravelspaceSans-Bold", str(bold)))
+            return "TravelspaceSans", "TravelspaceSans-Bold"
+        except Exception as exc:
+            errors.append(f"{regular}: {exc}")
 
-    return FONT_REGULAR, FONT_BOLD
+    details = f" Errors: {'; '.join(errors)}" if errors else ""
+    raise RuntimeError(
+        "A TrueType font with Cyrillic support was not found. "
+        f"Upload DejaVuSans.ttf and DejaVuSans-Bold.ttf to {FONT_DIR}."
+        + details
+    )
 
 
 FONT_REGULAR, FONT_BOLD = _register_fonts()
@@ -392,12 +411,30 @@ def _program_font_settings(days_count: int, available_height: float) -> tuple[fl
     return 8.6, 7.2, 1, 90
 
 
-def _draw_program(c: canvas.Canvas, tour: dict, x: float, y: float, width: float, bottom_y: float) -> float:
-    program = tour.get("program") if isinstance(tour.get("program"), list) else []
+def _draw_program(
+    c: canvas.Canvas,
+    tour: dict,
+    program_config: dict,
+    x: float,
+    y: float,
+    width: float,
+    bottom_y: float,
+) -> float:
+    program = (
+        program_config.get("days")
+        if isinstance(program_config.get("days"), list)
+        else []
+    )
     program = [item for item in program if isinstance(item, dict)]
 
     if not program:
-        description = tour.get("description") or tour.get("short_description") or tour.get("tagline") or "Подробная программа уточняется у менеджера."
+        description = (
+            program_config.get("intro")
+            or tour.get("description")
+            or tour.get("short_description")
+            or tour.get("tagline")
+            or "Подробная программа уточняется у менеджера."
+        )
         y = _draw_section_title(c, "Кратко о туре", x, y, width)
         return _draw_wrapped(c, _truncate_words(description, 760), x, y, width, FONT_REGULAR, 9.0, DARK, leading=11, max_lines=10) - 2
 
@@ -547,10 +584,23 @@ def _draw_info_blocks(
             c.drawString(bx + 8, line_y, line)
             line_y -= leading
 
-def build_tour_program_pdf(tour: dict, settings: dict | None = None, upload_dir: Path | None = None) -> bytes:
+def build_tour_program_pdf(
+    tour: dict,
+    settings: dict | None = None,
+    upload_dir: Path | None = None,
+    program_config: dict | None = None,
+) -> bytes:
     """Build a compact, strictly one-page PDF program for a tour."""
 
     settings = settings or {}
+    program_config = program_config if isinstance(program_config, dict) else {
+        "intro": tour.get("tagline") or tour.get("short_description") or "",
+        "days": tour.get("program") if isinstance(tour.get("program"), list) else [],
+        "included": tour.get("included") or [],
+        "excluded": tour.get("excluded") or [],
+        "important_info": tour.get("important_info") or [],
+        "show_info_blocks": True,
+    }
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A4)
     c.setTitle(_compact(tour.get("title")) or "Программа тура")
@@ -587,7 +637,7 @@ def build_tour_program_pdf(tour: dict, settings: dict | None = None, upload_dir:
         line_y -= 20
 
     y = PAGE_H - hero_h - 10
-    tagline = _compact(tour.get("tagline") or tour.get("short_description"))
+    tagline = _compact(program_config.get("intro"))
     if tagline:
         y = _draw_wrapped(c, _truncate_words(tagline, 165), MARGIN, y, PAGE_W - MARGIN * 2, FONT_BOLD, 8.9, MUTED, leading=10.2, max_lines=2)
         y -= 3
@@ -605,40 +655,83 @@ def build_tour_program_pdf(tour: dict, settings: dict | None = None, upload_dir:
     site = _compact(settings.get("site_url") or "travelspace.by")
     c.drawString(MARGIN, footer_y, f"{company} · {site} · {contacts}")
 
-    included = [_compact(i) for i in (tour.get("included") or []) if _compact(i)]
-    excluded = [_compact(i) for i in (tour.get("excluded") or []) if _compact(i)]
-    important = [_compact(i) for i in (tour.get("important_info") or []) if _compact(i)]
+    included = [
+        _compact(item)
+        for item in (program_config.get("included") or [])
+        if _compact(item)
+    ]
+    excluded = [
+        _compact(item)
+        for item in (program_config.get("excluded") or [])
+        if _compact(item)
+    ]
+    important = [
+        _compact(item)
+        for item in (program_config.get("important_info") or [])
+        if _compact(item)
+    ]
     info_blocks = [
         ("В стоимость входит", included),
         ("Оплачивается отдельно", excluded),
         ("Важно знать", important),
     ]
 
-    program = tour.get("program") if isinstance(tour.get("program"), list) else []
-    days_count = len([item for item in program if isinstance(item, dict)])
-    min_program_height = 86 + days_count * (27 if days_count <= 5 else 23 if days_count <= 10 else 18)
-    info_available = max(125, min(330, y - (footer_y + 25) - min_program_height))
-    info_h, info_size, info_leading, info_lines = _measure_info_blocks(info_blocks, PAGE_W - MARGIN * 2, info_available)
-
-    program_bottom_y = footer_y + 25 + info_h + 10
-    y_after_program = _draw_program(c, tour, MARGIN, y, PAGE_W - MARGIN * 2, program_bottom_y)
-
-    info_top = min(y_after_program - 9, y - 86)
-    min_info_top = footer_y + 25 + info_h
-    if info_top < min_info_top:
-        info_top = min_info_top
-
-    _draw_info_blocks(
-        c,
-        info_blocks,
-        MARGIN,
-        info_top,
-        PAGE_W - MARGIN * 2,
-        info_h,
-        info_size,
-        info_leading,
-        info_lines,
+    program = (
+        program_config.get("days")
+        if isinstance(program_config.get("days"), list)
+        else []
     )
+    days_count = len([item for item in program if isinstance(item, dict)])
+    show_info_blocks = program_config.get("show_info_blocks") is not False
+
+    if show_info_blocks:
+        min_program_height = 86 + days_count * (
+            27 if days_count <= 5 else 23 if days_count <= 10 else 18
+        )
+        info_available = max(
+            112,
+            min(300, y - (footer_y + 25) - min_program_height),
+        )
+        info_h, info_size, info_leading, info_lines = _measure_info_blocks(
+            info_blocks,
+            PAGE_W - MARGIN * 2,
+            info_available,
+        )
+        program_bottom_y = footer_y + 25 + info_h + 10
+    else:
+        info_h = 0
+        info_size = 0
+        info_leading = 0
+        info_lines = []
+        program_bottom_y = footer_y + 27
+
+    y_after_program = _draw_program(
+        c,
+        tour,
+        program_config,
+        MARGIN,
+        y,
+        PAGE_W - MARGIN * 2,
+        program_bottom_y,
+    )
+
+    if show_info_blocks:
+        info_top = min(y_after_program - 9, y - 86)
+        min_info_top = footer_y + 25 + info_h
+        if info_top < min_info_top:
+            info_top = min_info_top
+
+        _draw_info_blocks(
+            c,
+            info_blocks,
+            MARGIN,
+            info_top,
+            PAGE_W - MARGIN * 2,
+            info_h,
+            info_size,
+            info_leading,
+            info_lines,
+        )
 
     c.showPage()
     c.save()
