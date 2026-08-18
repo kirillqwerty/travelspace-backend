@@ -102,6 +102,14 @@ def _as_text(value: Any) -> str:
 def _strip_rich_text(value: Any) -> str:
     text = _as_text(value)
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1", text)
+    # ``:triangle:`` is a chat/emoji alias, not a drawable PDF glyph. It used
+    # to leak into descriptions as plain text, so remove it and its common
+    # variants before laying out the document.
+    text = re.sub(
+        r"(?i):(?:small_red_)?triangle(?:_down)?:",
+        " ",
+        text,
+    )
     text = text.replace("**", "").replace("__", "").replace("_", "")
     text = text.replace("\r", "\n")
     text = re.sub(r"<[^>]+>", " ", text)
@@ -133,11 +141,28 @@ def _truncate_words(value: Any, limit: int) -> str:
     return f"{cut}..." if cut else text[:limit].strip()
 
 
+def _limit_words(value: Any, limit: int) -> str:
+    """Limit text without adding an ellipsis that cannot be rendered fully."""
+    text = _compact(value)
+    if len(text) <= limit:
+        return text
+
+    cut = text[:limit].rsplit(" ", 1)[0].strip().rstrip(" ,;:-")
+    return cut or text[:limit].strip()
+
+
 def _text_width(text: str, font: str, size: float) -> float:
     return pdfmetrics.stringWidth(text, font, size)
 
 
-def _wrap_text(text: Any, font: str, size: float, max_width: float, max_lines: int | None = None) -> list[str]:
+def _wrap_text(
+    text: Any,
+    font: str,
+    size: float,
+    max_width: float,
+    max_lines: int | None = None,
+    append_ellipsis: bool = True,
+) -> list[str]:
     words = _compact(text).split()
     if not words:
         return []
@@ -155,7 +180,8 @@ def _wrap_text(text: Any, font: str, size: float, max_width: float, max_lines: i
         current = word
 
         if max_lines and len(lines) >= max_lines:
-            lines[-1] = lines[-1].rstrip(".,;: ") + "..."
+            if append_ellipsis:
+                lines[-1] = lines[-1].rstrip(".,;: ") + "..."
             return lines
 
     if current:
@@ -163,7 +189,8 @@ def _wrap_text(text: Any, font: str, size: float, max_width: float, max_lines: i
 
     if max_lines and len(lines) > max_lines:
         lines = lines[:max_lines]
-        lines[-1] = lines[-1].rstrip(".,;: ") + "..."
+        if append_ellipsis:
+            lines[-1] = lines[-1].rstrip(".,;: ") + "..."
 
     return lines
 
@@ -179,12 +206,20 @@ def _draw_wrapped(
     color=colors.black,
     leading: float | None = None,
     max_lines: int | None = None,
+    append_ellipsis: bool = True,
 ) -> float:
     leading = leading or size * 1.22
     c.setFont(font, size)
     c.setFillColor(color)
 
-    for line in _wrap_text(text, font, size, width, max_lines):
+    for line in _wrap_text(
+        text,
+        font,
+        size,
+        width,
+        max_lines,
+        append_ellipsis,
+    ):
         c.drawString(x, y, line)
         y -= leading
 
@@ -293,6 +328,32 @@ def _format_date(value: Any) -> str:
     return raw
 
 
+def _parse_pdf_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+
+    raw = _as_text(value)
+    if not raw:
+        return None
+
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+
+    date_part = raw.split("T", 1)[0].split(" ", 1)[0]
+    for fmt in _DATE_FORMATS:
+        try:
+            return datetime.strptime(date_part, fmt).date()
+        except ValueError:
+            continue
+
+    return None
+
+
 def _date_range(item: dict) -> str:
     start = _format_date(item.get("start") or item.get("date_start") or item.get("date"))
     end = _format_date(item.get("end"))
@@ -311,15 +372,62 @@ def _collect_dates(tour: dict) -> list[str]:
         if isinstance(chain, dict) and isinstance(chain.get("dates"), list):
             raw.extend([d for d in chain.get("dates") if isinstance(d, dict)])
 
+    today = date.today()
+    actual_dates: list[tuple[date, str]] = []
+
+    for item in raw:
+        start = _parse_pdf_date(
+            item.get("start") or item.get("date_start") or item.get("date")
+        )
+        end = _parse_pdf_date(item.get("end"))
+
+        # A departure that has already started is no longer a "nearest date".
+        # Records without a valid date cannot be proven actual and are skipped.
+        sort_date = start or end
+        if sort_date is None or (start or end) < today:
+            continue
+
+        value = _date_range(item)
+        if value:
+            actual_dates.append((sort_date, value))
+
+    actual_dates.sort(key=lambda item: item[0])
+
     values: list[str] = []
     seen: set[str] = set()
-    for item in raw:
-        value = _date_range(item)
-        if value and value not in seen:
+    for _sort_date, value in actual_dates:
+        if value not in seen:
             values.append(value)
             seen.add(value)
 
     return values
+
+
+DEPARTURE_CITY_GENITIVE = {
+    "минск": "Минска",
+    "гомель": "Гомеля",
+    "жлобин": "Жлобина",
+    "бобруйск": "Бобруйска",
+    "москва": "Москвы",
+    "витебск": "Витебска",
+    "могилев": "Могилева",
+    "могилёв": "Могилёва",
+    "новополоцк": "Новополоцка",
+    "брест": "Бреста",
+    "гродно": "Гродно",
+    "барановичи": "Барановичей",
+    "орша": "Орши",
+    "жодино": "Жодино",
+    "полоцк": "Полоцка",
+}
+
+
+def _departure_city_genitive(value: Any) -> str:
+    city = _compact(value)
+    if not city:
+        return ""
+
+    return DEPARTURE_CITY_GENITIVE.get(city.casefold(), city)
 
 
 def _departure_cities(tour: dict) -> str:
@@ -332,6 +440,7 @@ def _departure_cities(tour: dict) -> str:
     if not values and _as_text(tour.get("departure_city")):
         values = [_as_text(tour.get("departure_city"))]
 
+    values = [_departure_city_genitive(city) for city in values]
     return ", ".join(values) if values else "уточняйте"
 
 
@@ -394,21 +503,93 @@ def _draw_section_title(c: canvas.Canvas, text: str, x: float, y: float, width: 
     c.setFillColor(colors.white)
     c.setFont(FONT_BOLD, 12.2)
     c.drawString(x + 10, y - 12.4, text.upper())
-    return y - 25
+    # The pill ends at y - 17. Keep a visible 14 pt gap before the first day.
+    return y - 31
 
 
-def _program_font_settings(days_count: int, available_height: float) -> tuple[float, float, int, int]:
-    if days_count <= 0:
-        return 9.2, 8.3, 2, 280
+def description_limit_for_days(days_count: int) -> int:
+    """Keep each day description readable in two or three compact lines."""
+    if days_count <= 3:
+        return 300
+    if days_count <= 5:
+        return 260
+    if days_count <= 7:
+        return 220
+    if days_count <= 10:
+        return 180
+    if days_count <= 14:
+        return 120
+    return 80
 
-    avg_available = max(10, available_height / days_count)
-    if avg_available >= 31:
-        return 10.2, 8.9, 2, 230
-    if avg_available >= 23:
-        return 9.7, 8.3, 1, 170
-    if avg_available >= 18:
-        return 9.1, 7.7, 1, 125
-    return 8.6, 7.2, 1, 90
+
+def _measure_program_height(
+    descriptions: list[str],
+    width: float,
+    title_size: float,
+    body_size: float,
+    gap_before_line: float,
+    gap_after_line: float,
+) -> float:
+    title_leading = title_size * 1.12
+    body_leading = body_size * 1.16
+    height = len(descriptions) * (title_leading + 2)
+
+    for description in descriptions:
+        height += len(
+            _wrap_text(
+                description,
+                FONT_REGULAR,
+                body_size,
+                width,
+                max_lines=3,
+                append_ellipsis=False,
+            )
+        ) * body_leading
+
+    if len(descriptions) > 1:
+        height += (len(descriptions) - 1) * (gap_before_line + gap_after_line)
+
+    return height
+
+
+def _program_layout(
+    descriptions: list[str],
+    width: float,
+    available_height: float,
+) -> tuple[float, float, float, float]:
+    """Choose the largest style that keeps every prepared line on the page."""
+    styles = (
+        (10.0, 8.7, 4.0, 9.0),
+        (9.5, 8.2, 3.5, 8.5),
+        (9.0, 7.7, 3.0, 8.0),
+        (8.5, 7.2, 2.8, 7.5),
+        (8.0, 6.7, 2.5, 7.0),
+        (7.5, 6.2, 2.2, 6.5),
+        (7.0, 5.7, 2.0, 6.0),
+    )
+
+    for style in styles:
+        if _measure_program_height(descriptions, width, *style) <= available_height:
+            return style
+
+    # Extremely long programs remain one page: scale the most compact style
+    # proportionally instead of silently dropping the final days.
+    title_size, body_size, before, after = styles[-1]
+    required = _measure_program_height(
+        descriptions,
+        width,
+        title_size,
+        body_size,
+        before,
+        after,
+    )
+    scale = min(1.0, available_height / max(required, 1))
+    return (
+        title_size * scale,
+        body_size * scale,
+        before * scale,
+        after * scale,
+    )
 
 
 def _draw_program(
@@ -441,17 +622,27 @@ def _draw_program(
     y = _draw_section_title(c, "Программа тура", x, y, width)
 
     count = len(program)
-    title_size, body_size, max_body_lines, max_desc = _program_font_settings(count, y - bottom_y)
+    description_limit = description_limit_for_days(count)
+    descriptions = [
+        _limit_words(
+            day.get("description") or day.get("notes") or "",
+            description_limit,
+        )
+        for day in program
+    ]
+    text_width = width - 27
+    title_size, body_size, gap_before_line, gap_after_line = _program_layout(
+        descriptions,
+        text_width,
+        y - bottom_y,
+    )
     title_leading = title_size * 1.13
     body_leading = body_size * 1.16
 
     for index, day in enumerate(program, start=1):
-        if y < bottom_y + 16:
-            break
-
         day_number = _as_text(day.get("day")) or str(index)
         title = _compact(day.get("title")) or f"День {day_number}"
-        description = _truncate_words(day.get("description") or day.get("notes") or "", max_desc)
+        description = descriptions[index - 1]
 
         c.setFillColor(ORANGE)
         c.circle(x + 10, y - 5, 8.5, stroke=0, fill=1)
@@ -461,28 +652,42 @@ def _draw_program(
 
         text_x = x + 27
         title_text = f"День {day_number}. {title}"
-        y = _draw_wrapped(c, title_text, text_x, y, width - 27, FONT_BOLD, title_size, DARK, leading=title_leading, max_lines=1)
+        c.setFillColor(DARK)
+        fitted_title_size = _fit_text(
+            c,
+            title_text,
+            text_x,
+            y,
+            text_width,
+            FONT_BOLD,
+            title_size,
+            min_size=max(4.8, title_size * 0.72),
+        )
+        y -= max(title_leading, fitted_title_size * 1.13)
 
-        if description and y > bottom_y + 12:
+        if description:
             y = _draw_wrapped(
                 c,
                 description,
                 text_x,
                 y + 1,
-                width - 27,
+                text_width,
                 FONT_REGULAR,
                 body_size,
                 colors.HexColor("#3F3F46"),
                 leading=body_leading,
-                max_lines=max_body_lines,
+                max_lines=3,
+                append_ellipsis=False,
             )
 
-        y -= 3
-        if index < count and y > bottom_y + 12:
+        y -= 2
+        if index < count:
+            y -= gap_before_line
             c.setStrokeColor(LINE)
             c.setLineWidth(0.55)
             c.line(text_x, y, x + width, y)
-            y -= 5
+            # Keep the next title's ascenders below the decorative line.
+            y -= gap_after_line
 
     return y
 
@@ -618,12 +823,26 @@ def build_tour_program_pdf(
     c.setFillColor(colors.Color(0, 0, 0, alpha=0.36))
     c.rect(0, PAGE_H - hero_h, PAGE_W, hero_h, stroke=0, fill=1)
 
-    company = _compact(settings.get("company_short") or settings.get("company_name") or "TRAVELSPACE")
-    c.setFillColor(colors.white)
-    c.setFont(FONT_BOLD, 14)
-    c.drawCentredString(PAGE_W / 2, PAGE_H - 26, company)
+    default_company = _compact(
+        settings.get("company_short")
+        or settings.get("company_name")
+        or "TRAVELSPACE"
+    )
+    header_company = (
+        _compact(program_config.get("header_company"))
+        if "header_company" in program_config
+        else default_company
+    )
+    if header_company:
+        c.setFillColor(colors.white)
+        c.setFont(FONT_BOLD, 14)
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 26, header_company)
 
-    title = _compact(tour.get("title")) or "Программа тура"
+    title = (
+        _compact(program_config.get("header_title"))
+        if "header_title" in program_config
+        else _compact(tour.get("title")) or "Программа тура"
+    )
     title_lines = _wrap_text(title.upper(), FONT_BOLD, 20.5, PAGE_W - MARGIN * 2, max_lines=2)
     title_box_h = 32 + max(0, len(title_lines) - 1) * 20
     title_box_y = PAGE_H - hero_h + 18
@@ -651,9 +870,41 @@ def build_tour_program_pdf(
     c.line(MARGIN, footer_y + 10, PAGE_W - MARGIN, footer_y + 10)
     c.setFillColor(MUTED)
     c.setFont(FONT_REGULAR, 7.2)
-    contacts = _compact(settings.get("phone") or settings.get("company_phone") or "+375 29 636 99 11")
-    site = _compact(settings.get("site_url") or "travelspace.by")
-    c.drawString(MARGIN, footer_y, f"{company} · {site} · {contacts}")
+    default_phone = _compact(
+        settings.get("phone")
+        or settings.get("company_phone")
+        or "+375 29 636 99 11"
+    )
+    default_site = _compact(settings.get("site_url") or "travelspace.by")
+    footer_company = (
+        _compact(program_config.get("footer_company"))
+        if "footer_company" in program_config
+        else default_company
+    )
+    footer_site = (
+        _compact(program_config.get("footer_site"))
+        if "footer_site" in program_config
+        else default_site
+    )
+    footer_phone = (
+        _compact(program_config.get("footer_phone"))
+        if "footer_phone" in program_config
+        else default_phone
+    )
+    footer_text = " · ".join(
+        value for value in (footer_company, footer_site, footer_phone) if value
+    )
+    if footer_text:
+        _fit_text(
+            c,
+            footer_text,
+            MARGIN,
+            footer_y,
+            PAGE_W - MARGIN * 2,
+            FONT_REGULAR,
+            7.2,
+            min_size=5.8,
+        )
 
     included = [
         _compact(item)

@@ -23,6 +23,7 @@ from datetime import datetime, timezone, date, timedelta, time as datetime_time
 from email.message import EmailMessage
 from html import escape
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -52,7 +53,19 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 
-from auth import authenticate, create_access_token, get_current_admin, seed_admin
+from auth import (
+    ADMIN_SESSION_COOKIE,
+    authenticate,
+    clear_login_failures,
+    create_access_token,
+    get_current_admin,
+    login_retry_after,
+    record_login_failure,
+    request_client_ip,
+    revoke_admin_tokens,
+    seed_admin,
+    validate_auth_configuration,
+)
 from seed import run_seed
 from seo_runtime import (
     FRONTEND_BUILD_DIR,
@@ -94,12 +107,19 @@ _tour_date_cleanup_task: asyncio.Task | None = None
 
 
 def _parse_cors_origins() -> list[str]:
-    raw = os.environ.get("CORS_ORIGINS", "*").strip()
-
-    if raw == "*":
-        return ["*"]
-
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    raw = os.environ.get(
+        "CORS_ORIGINS",
+        "https://travelspace.by,https://www.travelspace.by,"
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).strip()
+    origins = [origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()]
+    if not origins or "*" in origins:
+        raise RuntimeError(
+            "CORS_ORIGINS must contain explicit site origins; wildcard is forbidden"
+        )
+    if any(not origin.startswith(("http://", "https://")) for origin in origins):
+        raise RuntimeError("Every CORS_ORIGINS entry must be an http(s) origin")
+    return origins
 
 
 app.add_middleware(
@@ -109,6 +129,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _cookie_secure() -> bool:
+    configured = os.environ.get("COOKIE_SECURE")
+    if configured is not None:
+        normalized = configured.strip().lower()
+        if normalized not in {"true", "false"}:
+            raise RuntimeError("COOKIE_SECURE must be true or false")
+        secure = normalized == "true"
+        if (
+            not secure
+            and os.environ.get("PUBLIC_SITE_URL", "").lower().startswith("https://")
+        ):
+            raise RuntimeError("COOKIE_SECURE cannot be false for an HTTPS site")
+        return secure
+    return os.environ.get("PUBLIC_SITE_URL", "").lower().startswith("https://")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    response.headers["Content-Security-Policy"] = (
+        "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+    )
+    if _cookie_secure():
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
+    if request.url.path.startswith(("/api/auth", "/api/admin")):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 UPLOAD_DIR = Path(
@@ -133,8 +190,8 @@ class LoginIn(BaseModel):
 
 
 class LoginOut(BaseModel):
-    token: str
     user: dict
+    csrf_token: str
 
 
 class LeadIn(BaseModel):
@@ -662,8 +719,12 @@ def _safe_frontend_file(full_path: str) -> FileResponse | None:
 TOUR_PDF_PROGRAMS_COLLECTION = "tour_pdf_programs"
 
 
-def _default_tour_pdf_program(tour: dict) -> dict:
+def _default_tour_pdf_program(
+    tour: dict,
+    settings: dict | None = None,
+) -> dict:
     """Build a compact editable draft from the full tour program."""
+    settings = settings or {}
     days = []
 
     for index, day in enumerate(tour.get("program") or [], start=1):
@@ -682,6 +743,12 @@ def _default_tour_pdf_program(tour: dict) -> dict:
         )
 
     return {
+        "header_company": _as_text(
+            settings.get("company_short")
+            or settings.get("company_name")
+            or "TRAVELSPACE"
+        ),
+        "header_title": _as_text(tour.get("title")) or "Программа тура",
         "intro": _as_text(
             tour.get("tagline")
             or tour.get("short_description")
@@ -704,13 +771,61 @@ def _default_tour_pdf_program(tour: dict) -> dict:
             if _as_text(item)
         ],
         "show_info_blocks": True,
+        "footer_company": _as_text(
+            settings.get("company_short")
+            or settings.get("company_name")
+            or "TRAVELSPACE"
+        ),
+        "footer_site": _as_text(settings.get("site_url") or "travelspace.by"),
+        "footer_phone": _as_text(
+            settings.get("phone")
+            or settings.get("company_phone")
+            or "+375 29 636 99 11"
+        ),
         "source": "tour_program",
     }
 
 
-def _normalize_tour_pdf_program(payload: dict, tour: dict) -> dict:
-    fallback = _default_tour_pdf_program(tour)
+def _pdf_description_limit(days_count: int) -> int:
+    if days_count <= 3:
+        return 300
+    if days_count <= 5:
+        return 260
+    if days_count <= 7:
+        return 220
+    if days_count <= 10:
+        return 180
+    if days_count <= 14:
+        return 120
+    return 80
+
+
+def _limit_pdf_text(value: Any, limit: int) -> str:
+    text = _as_text(value)
+    if len(text) <= limit:
+        return text
+
+    cut = text[:limit].rsplit(" ", 1)[0].strip().rstrip(" ,;:-")
+    return cut or text[:limit].strip()
+
+
+def _normalize_tour_pdf_program(
+    payload: dict,
+    tour: dict,
+    settings: dict | None = None,
+) -> dict:
+    fallback = _default_tour_pdf_program(tour, settings)
     raw_days = payload.get("days") if isinstance(payload.get("days"), list) else []
+    raw_days = [
+        day
+        for day in raw_days
+        if isinstance(day, dict)
+        and (
+            _as_text(day.get("title"))
+            or _as_text(day.get("description") or day.get("text"))
+        )
+    ]
+    description_limit = _pdf_description_limit(len(raw_days))
     days = []
 
     for index, day in enumerate(raw_days, start=1):
@@ -718,7 +833,10 @@ def _normalize_tour_pdf_program(payload: dict, tour: dict) -> dict:
             continue
 
         title = _as_text(day.get("title"))
-        description = _as_text(day.get("description") or day.get("text"))
+        description = _limit_pdf_text(
+            day.get("description") or day.get("text"),
+            description_limit,
+        )
         day_number = _as_text(day.get("day")) or str(index)
 
         if not title and not description:
@@ -741,13 +859,23 @@ def _normalize_tour_pdf_program(payload: dict, tour: dict) -> dict:
 
         return [_as_text(item) for item in value if _as_text(item)]
 
+    def _editable_text(key: str, limit: int) -> str:
+        if key not in payload:
+            return fallback[key]
+        return _limit_pdf_text(payload.get(key), limit)
+
     return {
+        "header_company": _editable_text("header_company", 80),
+        "header_title": _editable_text("header_title", 160),
         "intro": _as_text(payload.get("intro")),
         "days": days,
         "included": _strings("included"),
         "excluded": _strings("excluded"),
         "important_info": _strings("important_info"),
         "show_info_blocks": payload.get("show_info_blocks") is not False,
+        "footer_company": _editable_text("footer_company", 80),
+        "footer_site": _editable_text("footer_site", 120),
+        "footer_phone": _editable_text("footer_phone", 80),
         "source": "admin",
     }
 
@@ -766,12 +894,23 @@ def _tour_pdf_program_record(tour_id: str | None) -> dict | None:
     )
 
 
-def _saved_tour_pdf_program(tour_id: str | None) -> dict | None:
+def _saved_tour_pdf_program(
+    tour_id: str | None,
+    tour: dict | None = None,
+    settings: dict | None = None,
+) -> dict | None:
     record = _tour_pdf_program_record(tour_id)
     if not record:
         return None
 
+    fallback = _default_tour_pdf_program(tour or {}, settings)
+
+    def _saved_text(key: str) -> str:
+        return _as_text(record.get(key)) if key in record else fallback[key]
+
     return {
+        "header_company": _saved_text("header_company"),
+        "header_title": _saved_text("header_title"),
         "intro": record.get("intro") or "",
         "days": record.get("days") if isinstance(record.get("days"), list) else [],
         "included": (
@@ -790,6 +929,9 @@ def _saved_tour_pdf_program(tour_id: str | None) -> dict | None:
             else []
         ),
         "show_info_blocks": record.get("show_info_blocks") is not False,
+        "footer_company": _saved_text("footer_company"),
+        "footer_site": _saved_text("footer_site"),
+        "footer_phone": _saved_text("footer_phone"),
         "source": "admin",
     }
 
@@ -844,13 +986,14 @@ async def download_tour_program(slug: str):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
     try:
+        settings = load("settings", default={})
         program_config = (
-            _saved_tour_pdf_program(tour.get("id"))
-            or _default_tour_pdf_program(tour)
+            _saved_tour_pdf_program(tour.get("id"), tour, settings)
+            or _default_tour_pdf_program(tour, settings)
         )
         pdf = build_tour_program_pdf(
             tour,
-            settings=load("settings", default={}),
+            settings=settings,
             upload_dir=UPLOAD_DIR,
             program_config=program_config,
         )
@@ -964,22 +1107,63 @@ async def create_lead(
 
 
 @api.post("/auth/login", response_model=LoginOut)
-async def login(payload: LoginIn):
+async def login(payload: LoginIn, request: Request, response: Response):
+    client_ip = request_client_ip(request)
+    retry_after = login_retry_after(client_ip, payload.email)
+    if retry_after:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Слишком много попыток входа. Попробуйте позже.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = authenticate(payload.email, payload.password)
 
     if not user:
+        record_login_failure(client_ip, payload.email)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный email или пароль",
         )
 
-    token = create_access_token(user["email"])
-    return {"token": token, "user": user}
+    clear_login_failures(client_ip, payload.email)
+    token, csrf_token, lifetime_seconds = create_access_token(user)
+    response.set_cookie(
+        key=ADMIN_SESSION_COOKIE,
+        value=token,
+        max_age=lifetime_seconds,
+        expires=lifetime_seconds,
+        path="/api",
+        secure=_cookie_secure(),
+        httponly=True,
+        samesite="strict",
+    )
+    return {
+        "user": {
+            "email": user["email"],
+            "name": user.get("name") or "Administrator",
+            "role": "admin",
+        },
+        "csrf_token": csrf_token,
+    }
 
 
 @api.get("/auth/me")
 async def me(current=Depends(get_current_admin)):
     return current
+
+
+@api.post("/auth/logout")
+async def logout(response: Response, current=Depends(get_current_admin)):
+    revoke_admin_tokens(current["email"])
+    response.delete_cookie(
+        key=ADMIN_SESSION_COOKIE,
+        path="/api",
+        secure=_cookie_secure(),
+        httponly=True,
+        samesite="strict",
+    )
+    return _ok()
 
 
 @api.post("/admin/upload")
@@ -1043,8 +1227,9 @@ async def admin_get_tour_pdf_program(
     if not tour:
         raise HTTPException(status_code=404, detail="Тур не найден")
 
-    generated_program = _default_tour_pdf_program(tour)
-    saved_program = _saved_tour_pdf_program(item_id)
+    settings = load("settings", default={})
+    generated_program = _default_tour_pdf_program(tour, settings)
+    saved_program = _saved_tour_pdf_program(item_id, tour, settings)
 
     return {
         "tour_id": tour.get("id"),
@@ -1070,7 +1255,8 @@ async def admin_update_tour_pdf_program(
     if not tour:
         raise HTTPException(status_code=404, detail="Тур не найден")
 
-    pdf_program = _normalize_tour_pdf_program(payload, tour)
+    settings = load("settings", default={})
+    pdf_program = _normalize_tour_pdf_program(payload, tour, settings)
     existing = _tour_pdf_program_record(item_id)
     now = _now()
 
@@ -1098,7 +1284,9 @@ async def admin_update_tour_pdf_program(
 
     return {
         "ok": True,
-        "pdf_program": _saved_tour_pdf_program(item_id) or pdf_program,
+        "pdf_program": (
+            _saved_tour_pdf_program(item_id, tour, settings) or pdf_program
+        ),
         "record_id": updated.get("id") if updated else None,
     }
 
@@ -1367,6 +1555,8 @@ async def serve_react_app(full_path: str):
 async def on_startup() -> None:
     global _tour_date_cleanup_task
 
+    _cookie_secure()
+    validate_auth_configuration()
     seed_admin()
     run_seed()
     _prune_all_tour_departure_dates()

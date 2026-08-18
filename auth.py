@@ -1,8 +1,16 @@
-"""JWT auth utilities adapted to JSON file storage."""
+"""Authentication helpers for the single Travelspace administrator.
+
+The browser session is stored in a short-lived HttpOnly cookie. Mutating
+requests additionally require a CSRF token which is bound to that session.
+"""
 
 from __future__ import annotations
 
 import os
+import secrets
+import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
@@ -12,12 +20,82 @@ from fastapi import HTTPException, Request, status
 from storage import get_by, list_items, save
 
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_DAYS = 7
+JWT_ISSUER = "travelspace-admin"
+JWT_AUDIENCE = "travelspace-admin-panel"
 ADMIN_FILE = "admin"
+ADMIN_SESSION_COOKIE = "travelspace_admin_session"
+CSRF_HEADER = "X-CSRF-Token"
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+DEFAULT_ACCESS_TOKEN_MINUTES = 480
+MAX_ACCESS_TOKEN_MINUTES = 1_440
+LOGIN_WINDOW_SECONDS = 15 * 60
+LOGIN_MAX_FAILURES = 5
+
+_PLACEHOLDER_MARKERS = (
+    "change_me",
+    "replace_me",
+    "example.invalid",
+    "your_",
+    "mock_",
+)
+_login_failures: dict[str, deque[float]] = defaultdict(deque)
+_login_failures_lock = threading.Lock()
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    lowered = value.lower()
+    if any(marker in lowered for marker in _PLACEHOLDER_MARKERS):
+        raise RuntimeError(f"{name} still contains a placeholder")
+    return value
+
+
+def _admin_email() -> str:
+    email = _required_env("ADMIN_EMAIL").lower()
+    if "@" not in email:
+        raise RuntimeError("ADMIN_EMAIL must be a valid email address")
+    return email
+
+
+def _admin_password() -> str:
+    password = _required_env("ADMIN_PASSWORD")
+    if len(password) < 16:
+        raise RuntimeError("ADMIN_PASSWORD must contain at least 16 characters")
+    return password
 
 
 def _secret() -> str:
-    return os.environ["JWT_SECRET"]
+    value = _required_env("JWT_SECRET")
+    if len(value.encode("utf-8")) < 32:
+        raise RuntimeError("JWT_SECRET must contain at least 32 bytes")
+    return value
+
+
+def access_token_minutes() -> int:
+    raw = os.environ.get(
+        "ACCESS_TOKEN_MINUTES",
+        str(DEFAULT_ACCESS_TOKEN_MINUTES),
+    )
+    try:
+        minutes = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("ACCESS_TOKEN_MINUTES must be an integer") from exc
+    if not 5 <= minutes <= MAX_ACCESS_TOKEN_MINUTES:
+        raise RuntimeError(
+            f"ACCESS_TOKEN_MINUTES must be between 5 and {MAX_ACCESS_TOKEN_MINUTES}"
+        )
+    return minutes
+
+
+def validate_auth_configuration() -> None:
+    """Fail startup when authentication still uses weak/default settings."""
+    _admin_email()
+    _admin_password()
+    _secret()
+    access_token_minutes()
 
 
 def hash_password(password: str) -> str:
@@ -31,73 +109,254 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(email: str) -> str:
-    payload = {
-        "sub": email,
-        "email": email,
-        "type": "access",
-        "exp": datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_DAYS),
+# This fixed hash makes an unknown-email attempt perform the same expensive
+# bcrypt operation as a known-email attempt without creating a real account.
+_DUMMY_PASSWORD_HASH = "$2b$12$3v0T62G2OcNtd5BmOrHN6eOQCvYcmUgw4BOfJB9xCz7uvTbP4pLwK"
+
+
+def _public_user(user: dict, csrf_token: str | None = None) -> dict:
+    result = {
+        "email": user["email"],
+        "name": user.get("name") or "Administrator",
+        "role": "admin",
     }
-    return jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
+    if csrf_token:
+        result["csrf_token"] = csrf_token
+    return result
+
+
+def create_access_token(user: dict) -> tuple[str, str, int]:
+    now = datetime.now(timezone.utc)
+    csrf_token = secrets.token_urlsafe(32)
+    lifetime_seconds = access_token_minutes() * 60
+    payload = {
+        "sub": user["email"],
+        "email": user["email"],
+        "type": "access",
+        "role": "admin",
+        "ver": user["token_version"],
+        "csrf": csrf_token,
+        "jti": secrets.token_urlsafe(24),
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(seconds=lifetime_seconds),
+        "iss": JWT_ISSUER,
+        "aud": JWT_AUDIENCE,
+    }
+    token = jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
+    return token, csrf_token, lifetime_seconds
 
 
 def decode_token(token: str) -> dict:
-    return jwt.decode(token, _secret(), algorithms=[JWT_ALGORITHM])
+    return jwt.decode(
+        token,
+        _secret(),
+        algorithms=[JWT_ALGORITHM],
+        issuer=JWT_ISSUER,
+        audience=JWT_AUDIENCE,
+        options={
+            "require": [
+                "sub",
+                "email",
+                "type",
+                "role",
+                "ver",
+                "csrf",
+                "jti",
+                "iat",
+                "nbf",
+                "exp",
+                "iss",
+                "aud",
+            ]
+        },
+    )
 
 
 def seed_admin() -> None:
-    """Create the admin user on startup if it doesn't exist.
-
-    Stored in /app/backend/data/admin.json as a single-element list. Idempotent:
-    only re-hashes if the password actually changed.
-    """
-    email = os.environ.get("ADMIN_EMAIL", "admin@belarustours.by")
-    password = os.environ.get("ADMIN_PASSWORD", "admin123")
+    """Create/update the one configured admin and remove stale accounts."""
+    validate_auth_configuration()
+    email = _admin_email()
+    password = _admin_password()
     admins = list_items(ADMIN_FILE)
-    existing = next((a for a in admins if a.get("email") == email), None)
+    existing = next(
+        (item for item in admins if str(item.get("email", "")).lower() == email),
+        None,
+    )
+    now = datetime.now(timezone.utc).isoformat()
+
     if existing is None:
-        admins.append(
+        configured = {
+            "email": email,
+            "password_hash": hash_password(password),
+            "name": "Administrator",
+            "role": "admin",
+            "active": True,
+            "token_version": secrets.token_urlsafe(24),
+            "created_at": now,
+            "updated_at": now,
+        }
+    else:
+        configured = dict(existing)
+        configured.update(
             {
                 "email": email,
-                "password_hash": hash_password(password),
-                "name": "Administrator",
+                "name": configured.get("name") or "Administrator",
                 "role": "admin",
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "active": True,
+                "updated_at": now,
             }
         )
-        save(ADMIN_FILE, admins)
-    elif not verify_password(password, existing["password_hash"]):
-        for a in admins:
-            if a.get("email") == email:
-                a["password_hash"] = hash_password(password)
-        save(ADMIN_FILE, admins)
+        password_changed = not verify_password(
+            password,
+            str(configured.get("password_hash", "")),
+        )
+        if password_changed:
+            configured["password_hash"] = hash_password(password)
+            configured["token_version"] = secrets.token_urlsafe(24)
+        elif not configured.get("token_version"):
+            configured["token_version"] = secrets.token_urlsafe(24)
+
+    # The product currently has a single-administrator model. Saving only the
+    # configured account also removes old default or forgotten accounts.
+    save(ADMIN_FILE, [configured])
 
 
 def authenticate(email: str, password: str) -> dict | None:
-    user = get_by(ADMIN_FILE, "email", email.lower().strip())
+    normalized_email = email.lower().strip()
+    configured_email = _admin_email()
+    user = (
+        get_by(ADMIN_FILE, "email", configured_email)
+        if secrets.compare_digest(normalized_email, configured_email)
+        else None
+    )
     if not user:
+        verify_password(password, _DUMMY_PASSWORD_HASH)
         return None
-    if not verify_password(password, user["password_hash"]):
+    if not verify_password(password, str(user.get("password_hash", ""))):
         return None
-    return {"email": user["email"], "name": user.get("name"), "role": user.get("role", "admin")}
+    if user.get("active") is not True or user.get("role") != "admin":
+        return None
+    if not user.get("token_version"):
+        return None
+    return user
+
+
+def revoke_admin_tokens(email: str) -> None:
+    admins = list_items(ADMIN_FILE)
+    changed = False
+    for user in admins:
+        if str(user.get("email", "")).lower() == email.lower():
+            user["token_version"] = secrets.token_urlsafe(24)
+            user["updated_at"] = datetime.now(timezone.utc).isoformat()
+            changed = True
+    if changed:
+        save(ADMIN_FILE, admins)
+
+
+def _failure_keys(client_ip: str, email: str) -> tuple[str, str]:
+    normalized_email = email.lower().strip()
+    return f"ip:{client_ip}", f"account:{client_ip}:{normalized_email}"
+
+
+def _prune_failures(attempts: deque[float], now: float) -> None:
+    while attempts and now - attempts[0] >= LOGIN_WINDOW_SECONDS:
+        attempts.popleft()
+
+
+def login_retry_after(client_ip: str, email: str) -> int:
+    now = time.monotonic()
+    with _login_failures_lock:
+        retry_after = 0
+        for key in _failure_keys(client_ip, email):
+            attempts = _login_failures[key]
+            _prune_failures(attempts, now)
+            if len(attempts) >= LOGIN_MAX_FAILURES:
+                retry_after = max(
+                    retry_after,
+                    int(LOGIN_WINDOW_SECONDS - (now - attempts[0])) + 1,
+                )
+        return retry_after
+
+
+def record_login_failure(client_ip: str, email: str) -> None:
+    now = time.monotonic()
+    with _login_failures_lock:
+        for key in _failure_keys(client_ip, email):
+            attempts = _login_failures[key]
+            _prune_failures(attempts, now)
+            attempts.append(now)
+
+
+def clear_login_failures(client_ip: str, email: str) -> None:
+    with _login_failures_lock:
+        for key in _failure_keys(client_ip, email):
+            _login_failures.pop(key, None)
+
+
+def request_client_ip(request: Request) -> str:
+    if os.environ.get("TRUST_PROXY_HEADERS", "false").lower() == "true":
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",", 1)[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 async def get_current_admin(request: Request) -> dict:
-    """Dependency: extract bearer token, return current admin user."""
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    token = auth[7:]
+    """Validate the cookie session and enforce CSRF on mutating requests."""
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
     try:
         payload = decode_token(token)
-    except jwt.ExpiredSignatureError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token expired") from e
-    except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from e
-    if payload.get("type") != "access":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
-    email = payload.get("email")
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired",
+        ) from exc
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session",
+        ) from exc
+
+    email = str(payload.get("email", "")).lower()
+    if (
+        payload.get("type") != "access"
+        or payload.get("role") != "admin"
+        or payload.get("sub") != email
+        or not secrets.compare_digest(email, _admin_email())
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session",
+        )
+
     user = get_by(ADMIN_FILE, "email", email)
-    if not user:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
-    return {"email": user["email"], "name": user.get("name"), "role": user.get("role", "admin")}
+    if (
+        not user
+        or user.get("active") is not True
+        or user.get("role") != "admin"
+        or not secrets.compare_digest(
+            str(payload.get("ver", "")),
+            str(user.get("token_version", "")),
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session revoked",
+        )
+
+    csrf_token = str(payload.get("csrf", ""))
+    if request.method.upper() in UNSAFE_METHODS:
+        supplied_csrf = request.headers.get(CSRF_HEADER, "")
+        if not supplied_csrf or not secrets.compare_digest(supplied_csrf, csrf_token):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Invalid CSRF token",
+            )
+
+    return _public_user(user, csrf_token)

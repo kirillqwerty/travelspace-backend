@@ -1,6 +1,6 @@
 """Backend regression tests for tour operator API (JSON storage).
 
-Covers public endpoints, lead validation, JWT auth, admin CRUD.
+Covers public endpoints, lead validation, cookie auth, CSRF, admin CRUD.
 NOTE: "directions" entity has been REMOVED. All endpoints below must
 reflect this — there is no /api/directions or /api/admin/directions.
 """
@@ -12,11 +12,11 @@ import uuid
 import pytest
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "http://localhost:8000").rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "admin@test.com"
-ADMIN_PASSWORD = "admin123"
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or os.environ.get("ADMIN_EMAIL")
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD") or os.environ.get("ADMIN_PASSWORD")
 
 TOUR_SLUGS = [
     "dagestan-7-dney",
@@ -36,18 +36,22 @@ def client():
 
 
 @pytest.fixture(scope="session")
-def token(client):
+def csrf_token(client):
+    if not ADMIN_EMAIL or not ADMIN_PASSWORD:
+        pytest.skip("Set TEST_ADMIN_EMAIL and TEST_ADMIN_PASSWORD for admin API tests")
     r = client.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
     assert r.status_code == 200, f"login failed: {r.status_code} {r.text}"
     data = r.json()
-    assert "token" in data and "user" in data
+    assert "token" not in data
+    assert "csrf_token" in data and "user" in data
     assert data["user"]["email"] == ADMIN_EMAIL
-    return data["token"]
+    assert client.cookies.get("travelspace_admin_session")
+    return data["csrf_token"]
 
 
 @pytest.fixture()
-def auth_headers(token):
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+def auth_headers(csrf_token):
+    return {"X-CSRF-Token": csrf_token, "Content-Type": "application/json"}
 
 
 # ---------- Public endpoints ----------
@@ -185,7 +189,7 @@ class TestLeads:
         assert r.status_code == 422
 
     def test_admin_leads_unauthorized(self, client):
-        r = client.get(f"{API}/admin/leads/list")
+        r = requests.get(f"{API}/admin/leads/list")
         assert r.status_code == 401
 
     def test_admin_leads_list_and_status(self, client, auth_headers):
@@ -217,18 +221,25 @@ class TestAuth:
         r = client.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": "wrong"})
         assert r.status_code == 401
 
-    def test_me_no_token(self, client):
-        r = client.get(f"{API}/auth/me")
+    def test_me_no_session(self, client):
+        r = requests.get(f"{API}/auth/me")
         assert r.status_code == 401
 
-    def test_me_with_token(self, client, auth_headers):
+    def test_me_with_session(self, client, auth_headers):
         r = client.get(f"{API}/auth/me", headers=auth_headers)
         assert r.status_code == 200
         assert r.json().get("email") == ADMIN_EMAIL
 
-    def test_me_bad_token(self, client):
-        r = client.get(f"{API}/auth/me", headers={"Authorization": "Bearer not-a-token"})
+    def test_bearer_token_is_not_accepted(self, client):
+        r = requests.get(
+            f"{API}/auth/me",
+            headers={"Authorization": "Bearer not-a-token"},
+        )
         assert r.status_code == 401
+
+    def test_admin_write_requires_csrf(self, client, auth_headers):
+        r = client.post(f"{API}/admin/faq", json={"question": "TEST_csrf"})
+        assert r.status_code == 403
 
 
 # ---------- Admin CRUD ----------

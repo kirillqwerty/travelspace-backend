@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+data/admin.json
+__pycache__/
+*.py[cod]
+.venv/
+*.zip
+
