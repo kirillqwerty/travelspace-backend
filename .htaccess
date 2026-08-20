@@ -49,6 +49,10 @@ RewriteRule ^og-image\.jpg$ public/og-image.jpg [L]
 # Do not touch SSL / CloudLinux / Let's Encrypt files
 RewriteRule ^\.well-known/ - [L]
 
+# One canonical host for search engines and visitors.
+RewriteCond %{HTTP_HOST} ^www\.travelspace\.by$ [NC]
+RewriteRule ^ https://travelspace.by%{REQUEST_URI} [R=301,L,NE]
+
 # Everything else goes to Passenger / FastAPI
 
 # DO NOT REMOVE OR MODIFY. CLOUDLINUX ENV VARS CONFIGURATION BEGIN

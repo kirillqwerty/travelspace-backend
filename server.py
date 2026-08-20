@@ -71,7 +71,9 @@ from seo_runtime import (
     FRONTEND_BUILD_DIR,
     build_robots_txt,
     build_sitemap_xml,
+    get_http_status_for_path,
     get_redirect_target,
+    is_public_tour,
     render_index_html,
 )
 from storage import (
@@ -954,7 +956,7 @@ async def get_settings():
 async def get_tours(region: str | None = None, badge: str | None = None):
     # Public reads also clean stale departure dates from JSON storage.
     # A past date inside a chain is deleted, but the tour itself remains.
-    items = [t for t in _prune_all_tour_departure_dates() if t.get("active", True)]
+    items = [t for t in _prune_all_tour_departure_dates() if is_public_tour(t)]
 
     if region:
         items = [t for t in items if t.get("region_slug") == region]
@@ -971,7 +973,7 @@ async def get_tour(slug: str):
     tours = _prune_all_tour_departure_dates()
     tour = next((t for t in tours if t.get("slug") == slug), None)
 
-    if not tour or not tour.get("active", True):
+    if not is_public_tour(tour):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
     return tour
@@ -982,7 +984,7 @@ async def download_tour_program(slug: str):
     tours = _prune_all_tour_departure_dates()
     tour = next((t for t in tours if t.get("slug") == slug), None)
 
-    if not tour or not tour.get("active", True):
+    if not is_public_tour(tour):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
     try:
@@ -1545,7 +1547,8 @@ async def serve_react_app(full_path: str):
             ),
         )
 
-    return HTMLResponse(html)
+    status_code = get_http_status_for_path(path)
+    return HTMLResponse(html, status_code=status_code)
 
 
 # ---------- Startup --------------------------------------------------------
