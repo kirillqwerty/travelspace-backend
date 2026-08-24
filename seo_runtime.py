@@ -13,6 +13,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 from storage import get_by, list_items, load
 
@@ -206,6 +207,50 @@ def _page_url(path: str) -> str:
     return PUBLIC_SITE_URL + _clean_path(path)
 
 
+def _canonical_url(value: Any, path: str) -> str:
+    """Return a canonical URL only when it belongs to the public site.
+
+    Editors may enter either a relative path or a full URL. External hosts,
+    query strings and fragments are intentionally ignored so an accidental
+    admin value cannot canonicalize the whole site to another domain.
+    """
+
+    default = _page_url(path)
+    raw = str(value or "").strip()
+    if not raw:
+        return default
+
+    if raw.startswith("/"):
+        candidate_path = _clean_path(raw)
+        if candidate_path != _clean_path(path) and get_http_status_for_path(candidate_path) != 200:
+            return default
+        return _page_url(candidate_path)
+
+    parsed = urlparse(raw)
+    public = urlparse(PUBLIC_SITE_URL)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != public.netloc.lower():
+        return default
+    candidate_path = _clean_path(parsed.path or "/")
+    if candidate_path != _clean_path(path) and get_http_status_for_path(candidate_path) != 200:
+        return default
+    return _page_url(candidate_path)
+
+
+def _record_canonical(record: dict[str, Any], path: str) -> str:
+    return _canonical_url(
+        record.get("seo_canonical_url")
+        or record.get("canonical_url")
+        or record.get("canonical"),
+        path,
+    )
+
+
+def canonical_url_for_path(value: Any, path: str) -> str:
+    """Public validator used by admin writes and runtime rendering."""
+
+    return _canonical_url(value, path)
+
+
 def _settings() -> dict[str, Any]:
     data = load("settings", default={})
     return data if isinstance(data, dict) else {}
@@ -223,6 +268,20 @@ def is_public_tour(tour: Any) -> bool:
 
 def is_public_article(article: Any) -> bool:
     return bool(isinstance(article, dict) and article.get("active", True) and article.get("slug"))
+
+
+def is_indexable_tour(tour: Any) -> bool:
+    if not is_public_tour(tour) or tour.get("seo_noindex", False):
+        return False
+    path = f"/tours/{tour['slug']}"
+    return _record_canonical(tour, path) == _page_url(path)
+
+
+def is_indexable_article(article: Any) -> bool:
+    if not is_public_article(article) or article.get("seo_noindex", False):
+        return False
+    path = f"/blog/{article['slug']}"
+    return _record_canonical(article, path) == _page_url(path)
 
 
 def _tour_image(tour: dict[str, Any]) -> str:
@@ -311,11 +370,12 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
         or tour.get("description")
         or f"{tour.get('title', 'Тур')}: программа, даты и стоимость поездки."
     )
+    canonical_url = _record_canonical(tour, path)
     structured = {
         "@type": "TouristTrip",
-        "name": tour.get("title"),
+        "name": tour.get("seo_h1") or tour.get("title"),
         "description": _limit(description, 220),
-        "url": _page_url(path),
+        "url": canonical_url,
         "image": _absolute_url(_tour_image(tour)),
         "touristType": "Групповой тур",
         "provider": {"@id": f"{PUBLIC_SITE_URL}/#organization"},
@@ -323,9 +383,11 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
     return {
         "title": tour.get("seo_title") or f"{tour.get('title', 'Тур')} | TRAVELSPACE",
         "description": description,
-        "heading": tour.get("title"),
+        "heading": tour.get("seo_h1") or tour.get("title"),
         "image": _tour_image(tour),
-        "no_index": False,
+        "canonical_url": canonical_url,
+        "no_index": bool(tour.get("seo_noindex", False)),
+        "no_follow": bool(tour.get("seo_nofollow", False)),
         "type": "article",
         "structured_data": structured,
         "record": tour,
@@ -337,25 +399,28 @@ def _article_seo(slug: str, path: str) -> dict[str, Any]:
     if not is_public_article(article):
         return _not_found("Статья")
     description = article.get("seo_description") or article.get("excerpt") or article.get("content")
+    canonical_url = _record_canonical(article, path)
     structured: dict[str, Any] = {
         "@type": "Article",
-        "headline": article.get("title"),
+        "headline": article.get("seo_h1") or article.get("title"),
         "description": _limit(description, 220),
-        "mainEntityOfPage": _page_url(path),
+        "mainEntityOfPage": canonical_url,
         "image": _absolute_url(article.get("seo_image") or article.get("cover") or DEFAULT_IMAGE),
         "author": {"@id": f"{PUBLIC_SITE_URL}/#organization"},
         "publisher": {"@id": f"{PUBLIC_SITE_URL}/#organization"},
     }
     if article.get("published_at"):
         structured["datePublished"] = article["published_at"]
-    if article.get("updated_at"):
-        structured["dateModified"] = article["updated_at"]
+    if article.get("seo_lastmod") or article.get("updated_at"):
+        structured["dateModified"] = article.get("seo_lastmod") or article["updated_at"]
     return {
         "title": article.get("seo_title") or f"{article.get('title', 'Статья')} | TRAVELSPACE",
         "description": description,
-        "heading": article.get("title"),
+        "heading": article.get("seo_h1") or article.get("title"),
         "image": article.get("seo_image") or article.get("cover") or DEFAULT_IMAGE,
-        "no_index": False,
+        "canonical_url": canonical_url,
+        "no_index": bool(article.get("seo_noindex", False)),
+        "no_follow": bool(article.get("seo_nofollow", False)),
         "type": "article",
         "structured_data": structured,
         "record": article,
@@ -442,6 +507,7 @@ def _breadcrumb_items(path: str, seo: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _structured_graph(path: str, seo: dict[str, Any]) -> dict[str, Any]:
     settings = _settings()
+    canonical_url = seo.get("canonical_url") or _page_url(path)
     organization: dict[str, Any] = {
         "@type": ["Organization", "TravelAgency"],
         "@id": f"{PUBLIC_SITE_URL}/#organization",
@@ -465,8 +531,8 @@ def _structured_graph(path: str, seo: dict[str, Any]) -> dict[str, Any]:
         },
         {
             "@type": "WebPage",
-            "@id": _page_url(path) + "#webpage",
-            "url": _page_url(path),
+            "@id": canonical_url + "#webpage",
+            "url": canonical_url,
             "name": _strip_html(seo.get("title")),
             "description": _limit(seo.get("description"), 220),
             "isPartOf": {"@id": f"{PUBLIC_SITE_URL}/#website"},
@@ -489,8 +555,13 @@ def _render_meta_block(path: str, seo: dict[str, Any]) -> str:
     title = _limit(seo.get("title") or DEFAULT_TITLE, 80)
     description = _limit(seo.get("description") or DEFAULT_DESCRIPTION, 180)
     image = _absolute_url(seo.get("image"))
-    url = _page_url(path)
-    robots = "noindex, follow" if seo.get("no_index") else "index, follow"
+    url = seo.get("canonical_url") or _page_url(path)
+    robots = ", ".join(
+        (
+            "noindex" if seo.get("no_index") else "index",
+            "nofollow" if seo.get("no_follow") else "follow",
+        )
+    )
     og_type = seo.get("type") or "website"
     attr = ' data-rh="true"'
     lines = [
@@ -533,15 +604,16 @@ def _flatten_text(value: Any) -> list[str]:
     return []
 
 
-def _render_paragraphs(value: Any, limit: int = 8, semantic_headings: bool = False) -> str:
+def _render_paragraphs(value: Any, limit: int | None = 8, semantic_headings: bool = False) -> str:
     chunks: list[str] = []
     if isinstance(value, str):
         chunks = [part.strip() for part in re.split(r"\n\s*\n|\r?\n", value) if part.strip()]
     else:
         chunks = _flatten_text(value)
     rendered: list[str] = []
-    for chunk in chunks[:limit]:
-        clean = _limit(chunk, 900)
+    selected_chunks = chunks if limit is None else chunks[:limit]
+    for chunk in selected_chunks:
+        clean = _strip_html(chunk)
         semantic = re.match(r"^(\d+)\.\s+(.+?[.!?])(?:\s+(.+))?$", clean) if semantic_headings else None
         if semantic:
             rendered.append(f"<h2>{escape(semantic.group(1) + '. ' + semantic.group(2))}</h2>")
@@ -554,6 +626,102 @@ def _render_paragraphs(value: Any, limit: int = 8, semantic_headings: bool = Fal
 
 def _link(path: str, label: Any) -> str:
     return f'<a href="{escape(_page_url(path), quote=True)}">{escape(_strip_html(label))}</a>'
+
+
+def _render_list(value: Any) -> str:
+    items = _flatten_text(value)
+    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>" if items else ""
+
+
+def _render_tour_gallery(tour: dict[str, Any]) -> str:
+    images = tour.get("gallery") if isinstance(tour.get("gallery"), list) else []
+    alts = tour.get("gallery_alts") if isinstance(tour.get("gallery_alts"), list) else []
+    figures = []
+    for index, image in enumerate(images):
+        if not image:
+            continue
+        alt = _strip_html(alts[index] if index < len(alts) else "") or _strip_html(tour.get("title"))
+        figures.append(
+            '<figure><img loading="lazy" width="1200" height="750" '
+            f'src="{escape(_absolute_url(image), quote=True)}" alt="{escape(alt, quote=True)}" /></figure>'
+        )
+    return "".join(figures)
+
+
+def _render_tour_program(program: Any) -> str:
+    if not isinstance(program, list):
+        return ""
+    result: list[str] = []
+    for index, day in enumerate(program):
+        if not isinstance(day, dict):
+            continue
+        day_number = _strip_html(day.get("day") or index + 1)
+        day_title = _strip_html(day.get("title"))
+        heading = f"День {day_number}" + (f" — {day_title}" if day_title else "")
+        result.append(f"<section><h3>{escape(heading)}</h3>")
+        result.append(_render_paragraphs(day.get("description"), limit=None))
+        result.append(_render_paragraphs(day.get("notes"), limit=None))
+        result.append("</section>")
+    return "".join(result)
+
+
+def _render_tour_faq(faq: Any) -> str:
+    if not isinstance(faq, list):
+        return ""
+    result: list[str] = []
+    for item in faq:
+        if not isinstance(item, dict):
+            continue
+        question = _strip_html(item.get("question"))
+        answer = _render_paragraphs(item.get("answer"), limit=None)
+        if question and answer:
+            result.append(f"<section><h3>{escape(question)}</h3>{answer}</section>")
+    return "".join(result)
+
+
+def _tour_dates(tour: dict[str, Any]) -> list[dict[str, Any]]:
+    dates: list[dict[str, Any]] = []
+    if isinstance(tour.get("dates"), list):
+        dates.extend(item for item in tour["dates"] if isinstance(item, dict))
+    if isinstance(tour.get("chains"), list):
+        for chain in tour["chains"]:
+            if not isinstance(chain, dict) or chain.get("active", True) is False:
+                continue
+            if isinstance(chain.get("dates"), list):
+                dates.extend(item for item in chain["dates"] if isinstance(item, dict))
+    unique: dict[str, dict[str, Any]] = {}
+    for item in dates:
+        if item.get("status") == "hidden":
+            continue
+        key = str(item.get("id") or f"{item.get('start')}|{item.get('end')}|{item.get('price')}")
+        unique.setdefault(key, item)
+    return list(unique.values())
+
+
+def _render_tour_dates_and_prices(tour: dict[str, Any]) -> str:
+    result: list[str] = []
+    base_price = tour.get("price_from")
+    if base_price not in (None, ""):
+        price_type = _strip_html(tour.get("price_type") or "от")
+        currency = _strip_html(tour.get("currency") or "BYN")
+        result.append(f"<p>Стоимость {escape(price_type)} {escape(str(base_price))} {escape(currency)}</p>")
+    date_items = []
+    for item in _tour_dates(tour):
+        start = _strip_html(item.get("start"))
+        end = _strip_html(item.get("end"))
+        label = start + (f" — {end}" if end and end != start else "")
+        price = item.get("promotion_price") if item.get("promotion_active") and item.get("promotion_price") not in (None, "") else item.get("price")
+        currency = item.get("promotion_currency") if item.get("promotion_active") else item.get("currency")
+        if price in (None, ""):
+            price = base_price
+            currency = currency or tour.get("currency")
+        if price not in (None, ""):
+            label += f": {price} {currency or 'BYN'}"
+        if label:
+            date_items.append(f"<li>{escape(label)}</li>")
+    if date_items:
+        result.append("<ul>" + "".join(date_items) + "</ul>")
+    return "".join(result)
 
 
 def _tour_list(tours: Iterable[dict[str, Any]]) -> str:
@@ -613,17 +781,38 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         parts.append("</ul>")
     elif path.startswith("/tours/") and seo.get("record"):
         tour = seo["record"]
+        description = _render_paragraphs(
+            tour.get("description") or tour.get("short_description"), limit=None
+        )
+        if description:
+            parts.append(f"<h2>О туре</h2>{description}")
+        gallery = _render_tour_gallery(tour)
+        if gallery:
+            parts.append(f"<h2>Фотографии тура</h2>{gallery}")
         for label, key in (
-            ("О туре", "description"),
-            ("Что вас ждёт", "highlights"),
-            ("Что увидим", "what_to_see"),
-            ("Программа тура", "program"),
-            ("В стоимость включено", "included"),
-            ("Важная информация", "important_info"),
+            ("Главные впечатления тура", "highlights"),
+            ("Что посмотреть", "what_to_see"),
         ):
-            content = _render_paragraphs(tour.get(key))
+            content = _render_list(tour.get(key))
             if content:
                 parts.append(f"<h2>{label}</h2>{content}")
+        program = _render_tour_program(tour.get("program"))
+        if program:
+            parts.append(f"<h2>Программа тура</h2>{program}")
+        for label, key in (
+            ("В стоимость включено", "included"),
+            ("В стоимость не включено", "excluded"),
+            ("Важная информация", "important_info"),
+        ):
+            content = _render_list(tour.get(key))
+            if content:
+                parts.append(f"<h2>{label}</h2>{content}")
+        dates_and_prices = _render_tour_dates_and_prices(tour)
+        if dates_and_prices:
+            parts.append(f"<h2>Даты и стоимость</h2>{dates_and_prices}")
+        faq = _render_tour_faq(tour.get("faq"))
+        if faq:
+            parts.append(f"<h2>Часто задаваемые вопросы</h2>{faq}")
     elif path.startswith("/blog/") and seo.get("record"):
         parts.append(_render_paragraphs(seo["record"].get("content"), limit=40, semantic_headings=True))
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
@@ -655,6 +844,13 @@ def _sitemap_date(value: Any) -> str | None:
     if not value:
         return None
     text = str(value).strip()
+    display_date = re.fullmatch(r"(\d{2})\.(\d{2})\.(\d{4})", text)
+    if display_date:
+        day, month, year = display_date.groups()
+        try:
+            return datetime(int(year), int(month), int(day)).date().isoformat()
+        except ValueError:
+            return None
     try:
         return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
     except ValueError:
@@ -665,11 +861,11 @@ def build_sitemap_xml() -> str:
     entries: list[tuple[str, str | None]] = [(path, None) for path in STATIC_PAGE_FALLBACKS]
     entries.extend((path, None) for path in LANDING_PAGES)
     for tour in list_items("tours"):
-        if is_public_tour(tour):
-            entries.append((f"/tours/{tour['slug']}", _sitemap_date(tour.get("updated_at") or tour.get("created_at"))))
+        if is_indexable_tour(tour):
+            entries.append((f"/tours/{tour['slug']}", _sitemap_date(tour.get("seo_lastmod") or tour.get("content_updated_at") or tour.get("updated_at") or tour.get("created_at"))))
     for article in list_items("articles"):
-        if is_public_article(article):
-            entries.append((f"/blog/{article['slug']}", _sitemap_date(article.get("updated_at") or article.get("published_at"))))
+        if is_indexable_article(article):
+            entries.append((f"/blog/{article['slug']}", _sitemap_date(article.get("seo_lastmod") or article.get("content_updated_at") or article.get("updated_at") or article.get("published_at"))))
     unique: dict[str, str | None] = {}
     for path, lastmod in entries:
         unique.setdefault(_clean_path(path), lastmod)

@@ -71,6 +71,7 @@ from seo_runtime import (
     FRONTEND_BUILD_DIR,
     build_robots_txt,
     build_sitemap_xml,
+    canonical_url_for_path,
     get_http_status_for_path,
     get_redirect_target,
     is_public_tour,
@@ -1312,13 +1313,76 @@ def _duplicate_tour(item_id: str) -> dict:
     item["order"] = _order_value(source) + 1
     item["created_at"] = _now()
     item["updated_at"] = _now()
+    item["seo_lastmod"] = ""
 
     add_item("tours", item)
     return item
 
 
+CONTENT_COLLECTIONS = {"tours", "articles"}
+SEO_CONTENT_MIGRATION_TIMESTAMP = "2026-08-20T00:00:00+03:00"
+SEO_H1_MIGRATIONS = {
+    "avtobusniy-tur-v-peterburg-na-vyhodnye": (
+        "Автобусный тур в Санкт-Петербург из Минска на выходные"
+    ),
+}
+CONTENT_TIMESTAMP_EXCLUDED_KEYS = {
+    "id",
+    "created_at",
+    "updated_at",
+    "content_updated_at",
+    "seo_lastmod",
+    "active",
+    "hidden",
+    "hide_from_catalog",
+    "order",
+    "auto_delete_dates_days_before",
+}
+
+
+def _content_changed(existing: dict, payload: dict) -> bool:
+    keys = set(payload) - CONTENT_TIMESTAMP_EXCLUDED_KEYS
+    return any(existing.get(key) != payload.get(key) for key in keys)
+
+
+def _normalize_content_seo(name: str, item: dict, existing: dict | None = None) -> None:
+    if name not in CONTENT_COLLECTIONS:
+        return
+    slug = item.get("slug") or (existing or {}).get("slug")
+    canonical = item.get("seo_canonical_url")
+    if not slug or not canonical:
+        return
+    prefix = "/tours/" if name == "tours" else "/blog/"
+    item["seo_canonical_url"] = canonical_url_for_path(canonical, prefix + str(slug))
+
+
+def _backfill_content_timestamps() -> None:
+    """Give legacy public content one truthful, stable SEO migration date.
+
+    The server-rendered body is a substantive change to every legacy tour and
+    article. The fixed release timestamp is written only when updated_at is
+    missing, so Passenger restarts never manufacture a fresh sitemap date.
+    """
+
+    for collection in CONTENT_COLLECTIONS:
+        items = list_items(collection)
+        changed = False
+        for item in items:
+            if not item.get("updated_at"):
+                item["updated_at"] = SEO_CONTENT_MIGRATION_TIMESTAMP
+                changed = True
+            if collection == "tours" and not item.get("seo_h1"):
+                migrated_h1 = SEO_H1_MIGRATIONS.get(str(item.get("slug") or ""))
+                if migrated_h1:
+                    item["seo_h1"] = migrated_h1
+                    changed = True
+        if changed:
+            save(collection, items)
+
+
 def _crud_create(name: str, payload: dict) -> dict:
     item = {**payload, "id": str(uuid.uuid4())}
+    _normalize_content_seo(name, item)
 
     if "active" not in item:
         item["active"] = True
@@ -1326,14 +1390,29 @@ def _crud_create(name: str, payload: dict) -> dict:
     if name == "tours":
         _prune_tour_departure_dates(item)
 
+    if name in CONTENT_COLLECTIONS:
+        now = _now()
+        item["created_at"] = now
+        item["updated_at"] = now
+
     add_item(name, item)
     return item
 
 
 def _crud_update(name: str, item_id: str, payload: dict) -> dict:
+    payload = {**payload}
+    existing = get_by(name, "id", item_id)
+    _normalize_content_seo(name, payload, existing)
+
     if name == "tours":
-        payload = {**payload}
         _prune_tour_departure_dates(payload)
+
+    if name in CONTENT_COLLECTIONS and existing:
+        if _content_changed(existing, payload):
+            payload["updated_at"] = _now()
+        else:
+            payload.pop("updated_at", None)
+        payload.pop("created_at", None)
 
     updated = update_item(name, item_id, payload)
 
@@ -1523,6 +1602,9 @@ async def serve_react_static(file_path: str):
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def serve_react_app(full_path: str):
+    if full_path and full_path.endswith("/"):
+        return RedirectResponse("/" + full_path.strip("/"), status_code=301)
+
     path = "/" + full_path.strip("/")
 
     if path.startswith("/api"):
@@ -1562,6 +1644,7 @@ async def on_startup() -> None:
     validate_auth_configuration()
     seed_admin()
     run_seed()
+    _backfill_content_timestamps()
     _prune_all_tour_departure_dates()
 
     if _tour_date_cleanup_task is None or _tour_date_cleanup_task.done():

@@ -11,6 +11,18 @@ TOURS = [
         "hidden": False,
         "description": "Большая программа тура.",
         "region_name": "Грузия",
+        "seo_h1": "Автобусный тур в Грузию из Минска",
+        "price_from": 1200,
+        "currency": "BYN",
+        "program": [
+            {"day": str(day), "title": f"Маршрут {day}", "description": f"Полное описание дня {day}."}
+            for day in range(1, 7)
+        ],
+        "included": ["Проезд", "Проживание"],
+        "excluded": ["Личные расходы"],
+        "important_info": ["Возьмите паспорт"],
+        "dates": [{"id": "date-1", "start": "2026-09-01", "end": "2026-09-07", "price": 1250, "currency": "BYN"}],
+        "faq": [{"question": "Нужен ли паспорт?", "answer": "Да, документ нужен."}],
         "updated_at": "2026-08-05T08:30:00+00:00",
     },
     {
@@ -18,6 +30,18 @@ TOURS = [
         "title": "Скрытый тур",
         "active": True,
         "hidden": True,
+    },
+    {
+        "slug": "noindex-tour",
+        "title": "Закрытый от поиска тур",
+        "active": True,
+        "seo_noindex": True,
+    },
+    {
+        "slug": "canonical-copy",
+        "title": "Копия тура",
+        "active": True,
+        "seo_canonical_url": "/tours/public-tour",
     },
 ]
 
@@ -28,6 +52,7 @@ ARTICLES = [
         "active": True,
         "content": "Полезный текст.",
         "published_at": "2026-08-01",
+        "seo_lastmod": "18.08.2026",
     }
 ]
 
@@ -62,8 +87,14 @@ def test_rendered_page_has_one_metadata_set_and_semantic_snapshot(tmp_path, monk
     assert html.count("application/ld+json") == 1
     assert 'data-rh="true"' in html
     assert 'data-seo-prerender="true"' in html
-    assert "<h1>Тур в Грузию</h1>" in html
+    assert "<h1>Автобусный тур в Грузию из Минска</h1>" in html
     assert "Большая программа тура" in html
+    assert "<h3>День 6 — Маршрут 6</h3>" in html
+    assert "Полное описание дня 6." in html
+    assert "Личные расходы" in html
+    assert "Возьмите паспорт" in html
+    assert "Нужен ли паспорт?" in html
+    assert "2026-09-01 — 2026-09-07: 1250 BYN" in html
 
 
 def test_status_and_indexability_are_consistent(monkeypatch):
@@ -71,6 +102,7 @@ def test_status_and_indexability_are_consistent(monkeypatch):
 
     assert seo_runtime.get_http_status_for_path("/tours/public-tour") == 200
     assert seo_runtime.get_http_status_for_path("/tours/hidden-tour") == 404
+    assert seo_runtime.get_http_status_for_path("/tours/noindex-tour") == 200
     assert seo_runtime.get_http_status_for_path("/does-not-exist") == 404
     assert seo_runtime.get_seo_for_path("/thanks")["no_index"] is True
     assert seo_runtime.get_seo_for_path("/does-not-exist")["no_index"] is True
@@ -83,8 +115,11 @@ def test_sitemap_contains_only_public_canonical_urls(monkeypatch):
 
     assert "https://travelspace.by/tours/public-tour" in sitemap
     assert "https://travelspace.by/tours/hidden-tour" not in sitemap
+    assert "https://travelspace.by/tours/noindex-tour" not in sitemap
+    assert "https://travelspace.by/tours/canonical-copy" not in sitemap
     assert "https://travelspace.by/tours/gruziya" in sitemap
     assert "<lastmod>2026-08-05</lastmod>" in sitemap
+    assert "<lastmod>2026-08-18</lastmod>" in sitemap
     assert "changefreq" not in sitemap
 
 
@@ -93,4 +128,28 @@ def test_legacy_direction_has_permanent_destination(monkeypatch):
     assert (
         seo_runtime.get_redirect_target("/directions/saint-petersburg")
         == "/tours/sankt-peterburg"
+    )
+
+
+def test_canonical_and_robots_overrides_are_safe(monkeypatch):
+    configure_storage(monkeypatch)
+
+    canonical_copy = seo_runtime.get_seo_for_path("/tours/canonical-copy")
+    assert canonical_copy["canonical_url"] == "https://travelspace.by/tours/public-tour"
+
+    noindex = seo_runtime.get_seo_for_path("/tours/noindex-tour")
+    meta = seo_runtime._render_meta_block("/tours/noindex-tour", noindex)
+    assert 'name="robots" content="noindex, follow"' in meta
+
+    assert (
+        seo_runtime.canonical_url_for_path(
+            "https://example.com/stolen", "/tours/public-tour"
+        )
+        == "https://travelspace.by/tours/public-tour"
+    )
+    assert (
+        seo_runtime.canonical_url_for_path(
+            "/does-not-exist", "/tours/public-tour"
+        )
+        == "https://travelspace.by/tours/public-tour"
     )
