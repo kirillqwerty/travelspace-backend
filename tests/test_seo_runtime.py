@@ -7,6 +7,7 @@ TOURS = [
     {
         "slug": "public-tour",
         "title": "Тур в Грузию",
+        "seo_title": "Автобусный тур в Грузию из Минска | TRAVELSPACE",
         "active": True,
         "hidden": False,
         "description": "Большая программа тура.",
@@ -56,17 +57,65 @@ ARTICLES = [
     }
 ]
 
+FAQ = [
+    {
+        "id": "faq-home",
+        "question": "Как забронировать автобусный тур?",
+        "answer": "Оставьте заявку, и менеджер подтвердит наличие мест.",
+        "order": 1,
+        "active": True,
+    },
+    {
+        "id": "faq-hidden-home",
+        "question": "Скрытый вопрос",
+        "answer": "Скрытый ответ",
+        "show_on_home": False,
+        "active": True,
+    },
+]
+
+SETTINGS = {
+    "home_page": {
+        "h1": "Автобусные туры из Минска",
+        "intro_title": "Автобусные туры из Минска и Беларуси",
+        "intro_text": "Первый абзац.\n\nЧитайте про [туры в Грузию](/tours/gruziya).",
+        "tours_title": "Популярные автобусные туры из Минска",
+        "directions_title": "Куда можно поехать из Минска на автобусе",
+        "directions_sections": [
+            {
+                "title": "Экскурсионные туры",
+                "text": "Выберите [Санкт-Петербург](/tours/sankt-peterburg).",
+                "link_label": "Все автобусные туры",
+                "link_url": "/tours/avtobusnye-iz-minska",
+            },
+            {"title": "Автобусные туры на море", "text": "Отдых у моря."},
+        ],
+        "faq_title": "Частые вопросы об автобусных турах из Минска",
+    },
+    "home_content_updated_at": "2026-08-24T12:00:00+03:00",
+}
+
 
 def configure_storage(monkeypatch):
     def list_items(name):
-        return TOURS if name == "tours" else ARTICLES if name == "articles" else []
+        if name == "tours":
+            return TOURS
+        if name == "articles":
+            return ARTICLES
+        if name == "faq":
+            return FAQ
+        return []
 
     def get_by(name, key, value):
         return next((item for item in list_items(name) if item.get(key) == value), None)
 
     monkeypatch.setattr(seo_runtime, "list_items", list_items)
     monkeypatch.setattr(seo_runtime, "get_by", get_by)
-    monkeypatch.setattr(seo_runtime, "load", lambda name, default=None: {} if name == "settings" else default)
+    monkeypatch.setattr(
+        seo_runtime,
+        "load",
+        lambda name, default=None: SETTINGS if name == "settings" else default,
+    )
 
 
 def test_rendered_page_has_one_metadata_set_and_semantic_snapshot(tmp_path, monkeypatch):
@@ -87,7 +136,9 @@ def test_rendered_page_has_one_metadata_set_and_semantic_snapshot(tmp_path, monk
     assert html.count("application/ld+json") == 1
     assert 'data-rh="true"' in html
     assert 'data-seo-prerender="true"' in html
-    assert "<h1>Автобусный тур в Грузию из Минска</h1>" in html
+    assert "<title data-rh=\"true\">Автобусный тур в Грузию из Минска | TRAVELSPACE</title>" in html
+    assert "<h1>Тур в Грузию</h1>" in html
+    assert "<h1>Автобусный тур в Грузию из Минска</h1>" not in html
     assert "Большая программа тура" in html
     assert "<h3>День 6 — Маршрут 6</h3>" in html
     assert "Полное описание дня 6." in html
@@ -118,9 +169,71 @@ def test_sitemap_contains_only_public_canonical_urls(monkeypatch):
     assert "https://travelspace.by/tours/noindex-tour" not in sitemap
     assert "https://travelspace.by/tours/canonical-copy" not in sitemap
     assert "https://travelspace.by/tours/gruziya" in sitemap
+    assert "https://travelspace.by/tours/arktika" in sitemap
+    assert (
+        "<loc>https://travelspace.by/</loc>\n    <lastmod>2026-08-24</lastmod>"
+        in sitemap
+    )
     assert "<lastmod>2026-08-05</lastmod>" in sitemap
     assert "<lastmod>2026-08-18</lastmod>" in sitemap
     assert "changefreq" not in sitemap
+
+
+def test_homepage_snapshot_matches_editable_semantic_structure(monkeypatch):
+    configure_storage(monkeypatch)
+
+    seo = seo_runtime.get_seo_for_path("/")
+    snapshot = seo_runtime._render_snapshot("/", seo)
+
+    assert snapshot.count("<h1>") == 1
+    assert "<h1>Автобусные туры из Минска</h1>" in snapshot
+    assert "<h2>Автобусные туры из Минска и Беларуси</h2>" in snapshot
+    assert "<h2>Популярные автобусные туры из Минска</h2>" in snapshot
+    assert "<h2>Куда можно поехать из Минска на автобусе</h2>" in snapshot
+    assert "<h3>Экскурсионные туры</h3>" in snapshot
+    assert "<h3>Автобусные туры на море</h3>" in snapshot
+    assert "<h2>Почему едут именно с нами</h2>" in snapshot
+    assert "<h2>Частые вопросы об автобусных турах из Минска</h2>" in snapshot
+    assert "<h3>Как забронировать автобусный тур?</h3>" in snapshot
+    assert "наличие мест" in snapshot
+    assert "Скрытый вопрос" not in snapshot
+    assert '<a href="/tours/gruziya">туры в Грузию</a>' in snapshot
+    assert '<a href="/tours/sankt-peterburg">Санкт-Петербург</a>' in snapshot
+
+    meta = seo_runtime._render_meta_block("/", seo)
+    assert 'rel="canonical" href="https://travelspace.by/"' in meta
+    assert '"@type":"FAQPage"' in meta
+
+
+def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
+    configure_storage(monkeypatch)
+    monkeypatch.setitem(
+        SETTINGS,
+        "seo_hubs",
+        {
+            "sankt-peterburg": {
+                "title": "Новый Title хаба | TRAVELSPACE",
+                "description": "Новое описание хаба.",
+                "heading": "Новый H1 Санкт-Петербурга",
+                "intro": "Первый абзац.\n\n[Подробный тур](/tours/public-tour).",
+                "content_updated_at": "2026-08-28T12:00:00+03:00",
+            }
+        },
+    )
+
+    seo = seo_runtime.get_seo_for_path("/tours/sankt-peterburg")
+    snapshot = seo_runtime._render_snapshot("/tours/sankt-peterburg", seo)
+    sitemap = seo_runtime.build_sitemap_xml()
+
+    assert seo["title"] == "Новый Title хаба | TRAVELSPACE"
+    assert seo["description"] == "Новое описание хаба."
+    assert "<h1>Новый H1 Санкт-Петербурга</h1>" in snapshot
+    assert '<a href="/tours/public-tour">Подробный тур</a>' in snapshot
+    assert (
+        "<loc>https://travelspace.by/tours/sankt-peterburg</loc>\n"
+        "    <lastmod>2026-08-28</lastmod>"
+        in sitemap
+    )
 
 
 def test_legacy_direction_has_permanent_destination(monkeypatch):

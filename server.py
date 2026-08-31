@@ -66,6 +66,13 @@ from auth import (
     seed_admin,
     validate_auth_configuration,
 )
+from homepage import (
+    HOME_CONTENT_MIGRATION_TIMESTAMP,
+    home_faq_content,
+    homepage_settings_changed,
+    is_home_faq,
+    settings_with_home_defaults,
+)
 from seed import run_seed
 from seo_runtime import (
     FRONTEND_BUILD_DIR,
@@ -76,6 +83,8 @@ from seo_runtime import (
     get_redirect_target,
     is_public_tour,
     render_index_html,
+    settings_with_seo_hub_defaults,
+    stamp_changed_seo_hubs,
 )
 from storage import (
     DATA_DIR as STORAGE_DATA_DIR,
@@ -950,7 +959,7 @@ async def root():
 @api.get("/settings")
 async def get_settings():
     data = load("settings", default={})
-    return data
+    return settings_with_seo_hub_defaults(settings_with_home_defaults(data))
 
 
 @api.get("/tours")
@@ -1380,6 +1389,25 @@ def _backfill_content_timestamps() -> None:
             save(collection, items)
 
 
+def _touch_home_content_timestamp(value: str | None = None) -> str:
+    settings = load("settings", default={})
+    settings = dict(settings) if isinstance(settings, dict) else {}
+    timestamp = value or _now()
+    settings["home_content_updated_at"] = timestamp
+    save("settings", settings)
+    return timestamp
+
+
+def _backfill_home_content_timestamp() -> None:
+    """Record this homepage SEO release once without changing it on restart."""
+
+    settings = load("settings", default={})
+    settings = dict(settings) if isinstance(settings, dict) else {}
+    if settings.get("home_content_updated_at"):
+        return
+    _touch_home_content_timestamp(HOME_CONTENT_MIGRATION_TIMESTAMP)
+
+
 def _crud_create(name: str, payload: dict) -> dict:
     item = {**payload, "id": str(uuid.uuid4())}
     _normalize_content_seo(name, item)
@@ -1396,6 +1424,8 @@ def _crud_create(name: str, payload: dict) -> dict:
         item["updated_at"] = now
 
     add_item(name, item)
+    if name == "faq" and is_home_faq(item):
+        _touch_home_content_timestamp()
     return item
 
 
@@ -1419,10 +1449,14 @@ def _crud_update(name: str, item_id: str, payload: dict) -> dict:
     if not updated:
         raise HTTPException(status_code=404, detail="Не найдено")
 
+    if name == "faq" and home_faq_content(existing) != home_faq_content(updated):
+        _touch_home_content_timestamp()
+
     return updated
 
 
 def _crud_delete(name: str, item_id: str) -> dict:
+    existing = get_by(name, "id", item_id)
     ok = delete_item(name, item_id)
 
     if not ok:
@@ -1432,6 +1466,9 @@ def _crud_delete(name: str, item_id: str) -> dict:
         program = _tour_pdf_program_record(item_id)
         if program:
             delete_item(TOUR_PDF_PROGRAMS_COLLECTION, program.get("id"))
+
+    if name == "faq" and is_home_faq(existing):
+        _touch_home_content_timestamp()
 
     return _ok()
 
@@ -1447,12 +1484,25 @@ COLLECTIONS = [
 
 @api.get("/admin/settings")
 async def admin_get_settings(current=Depends(get_current_admin)):
-    return load("settings", default={})
+    return settings_with_seo_hub_defaults(
+        settings_with_home_defaults(load("settings", default={}))
+    )
 
 
 @api.put("/admin/settings")
 async def admin_update_settings(payload: dict, current=Depends(get_current_admin)):
-    save("settings", payload)
+    existing = load("settings", default={})
+    existing = existing if isinstance(existing, dict) else {}
+    updated = dict(payload)
+    now = _now()
+    if homepage_settings_changed(existing, updated):
+        updated["home_content_updated_at"] = now
+    elif existing.get("home_content_updated_at"):
+        updated["home_content_updated_at"] = existing["home_content_updated_at"]
+    else:
+        updated.pop("home_content_updated_at", None)
+    updated = stamp_changed_seo_hubs(existing, updated, now)
+    save("settings", updated)
     return _ok()
 
 
@@ -1645,6 +1695,7 @@ async def on_startup() -> None:
     seed_admin()
     run_seed()
     _backfill_content_timestamps()
+    _backfill_home_content_timestamp()
     _prune_all_tour_departure_dates()
 
     if _tour_date_cleanup_task is None or _tour_date_cleanup_task.done():

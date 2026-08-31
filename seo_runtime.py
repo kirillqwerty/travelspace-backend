@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from homepage import home_benefits_content, home_page_content, is_home_faq
 from storage import get_by, list_items, load
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -99,55 +100,71 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "title": "Автобусные туры из Минска 2026 | TRAVELSPACE",
         "description": "Автобусные туры из Минска в Грузию, Дагестан, Санкт-Петербург, Карелию, Абхазию и другие направления.",
         "heading": "Автобусные туры из Минска",
+        "intro": "Готовые групповые маршруты с продуманной программой, сопровождением и удобными датами выезда. Сравните направления и выберите подходящую поездку.",
         "kind": "bus",
     },
     "/tours/avia-iz-minska": {
         "title": "Авиационные туры из Минска 2026 | TRAVELSPACE",
         "description": "Туры с перелётом из Минска: актуальные направления, программы, даты и стоимость поездок.",
         "heading": "Авиационные туры из Минска",
+        "intro": "Путешествия с перелётом для тех, кто хочет быстрее добраться до места отдыха. В карточках указаны программа, даты и состав стоимости.",
         "kind": "air",
     },
     "/tours/gruziya": {
         "title": "Туры в Грузию из Минска 2026 | TRAVELSPACE",
         "description": "Туры в Грузию из Минска: отдых на море, экскурсии, даты, программа и стоимость поездки.",
         "heading": "Туры в Грузию из Минска",
+        "intro": "Поездки в Грузию сочетают море, горные пейзажи, национальную кухню и экскурсии. На странице собраны актуальные программы TRAVELSPACE.",
         "keywords": ("груз", "gruzi"),
     },
     "/tours/sankt-peterburg": {
         "title": "Автобусный тур в Санкт-Петербург из Минска | TRAVELSPACE",
         "description": "Туры в Санкт-Петербург и Питер из Минска на выходные: программа, даты, отели и стоимость.",
         "heading": "Туры в Санкт-Петербург из Минска",
+        "intro": "Автобусные поездки в Санкт-Петербург из Минска с насыщенной экскурсионной программой. Выберите дату и изучите подробный маршрут тура.",
         "keywords": ("петербург", "питер", "peterburg"),
     },
     "/tours/dagestan": {
         "title": "Туры в Дагестан из Минска 2026 | TRAVELSPACE",
         "description": "Автобусные туры в Дагестан из Минска: горы, каньоны, экскурсии, даты и стоимость.",
         "heading": "Туры в Дагестан из Минска",
+        "intro": "Горные маршруты, Сулакский каньон, древние аулы и Каспийское море в одной поездке. Ниже — актуальные программы и даты.",
         "keywords": ("дагест", "dagestan"),
     },
     "/tours/kareliya": {
         "title": "Туры в Карелию из Минска 2026 | TRAVELSPACE",
         "description": "Автобусные туры в Карелию из Минска: Рускеала, Кижи, Ладожские шхеры, даты и программа.",
         "heading": "Туры в Карелию из Минска",
+        "intro": "Карельская природа, горный парк Рускеала, остров Кижи и Ладожские шхеры. Сравните программу и доступные даты поездки.",
         "keywords": ("карел", "kareli"),
     },
     "/tours/abhaziya": {
         "title": "Туры в Абхазию из Минска 2026 | TRAVELSPACE",
         "description": "Автобусные туры в Абхазию из Минска: море, экскурсии, программа, даты и стоимость.",
         "heading": "Туры в Абхазию из Минска",
+        "intro": "Отдых у моря с экскурсионной программой и организованным выездом из Минска. Изучите маршрут, отели и ближайшие даты.",
         "keywords": ("абхаз", "abhaz"),
     },
     "/tours/severnaya-osetiya": {
         "title": "Туры в Северную Осетию из Минска | TRAVELSPACE",
         "description": "Автобусные туры в Северную Осетию из Минска: горные маршруты, программа, даты и цены.",
         "heading": "Туры в Северную Осетию из Минска",
+        "intro": "Горные ущелья, древние башни и живописные дороги Северной Осетии. На странице собраны доступные программы TRAVELSPACE.",
         "keywords": ("осети", "oseti"),
     },
     "/tours/moskva": {
         "title": "Автобусные туры в Москву из Минска | TRAVELSPACE",
         "description": "Туры в Москву из Минска на выходные: экскурсионная программа, даты, отель и стоимость.",
         "heading": "Туры в Москву из Минска",
+        "intro": "Короткие автобусные поездки в Москву из Минска для насыщенных выходных. Проверьте программу, даты и включённые услуги.",
         "keywords": ("москв", "moskv"),
+    },
+    "/tours/arktika": {
+        "title": "Туры в Арктику из Минска | TRAVELSPACE",
+        "description": "Автобусные туры в Арктику из Минска: программа поездки, даты, маршрут и стоимость.",
+        "heading": "Туры в Арктику из Минска",
+        "intro": "Поездки за Полярный круг, северные пейзажи и необычная экскурсионная программа. На странице появятся актуальные даты и маршруты TRAVELSPACE.",
+        "keywords": ("аркти", "arkti"),
     },
 }
 
@@ -256,6 +273,66 @@ def _settings() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+EDITABLE_SEO_HUB_FIELDS = ("title", "description", "heading", "intro")
+
+
+def _seo_hub_slug(path: str) -> str:
+    return _clean_path(path).removeprefix("/tours/")
+
+
+def seo_hubs_with_defaults(settings: Any) -> dict[str, dict[str, Any]]:
+    settings_dict = settings if isinstance(settings, dict) else {}
+    configured = settings_dict.get("seo_hubs")
+    configured = configured if isinstance(configured, dict) else {}
+    result: dict[str, dict[str, Any]] = {}
+
+    for path, fallback in LANDING_PAGES.items():
+        slug = _seo_hub_slug(path)
+        selected = configured.get(slug)
+        selected = selected if isinstance(selected, dict) else {}
+        item: dict[str, Any] = {"path": path}
+        for field in EDITABLE_SEO_HUB_FIELDS:
+            value = selected.get(field)
+            item[field] = (
+                str(value).strip()
+                if isinstance(value, str) and value.strip()
+                else fallback.get(field, "")
+            )
+        if selected.get("content_updated_at"):
+            item["content_updated_at"] = selected["content_updated_at"]
+        result[slug] = item
+    return result
+
+
+def settings_with_seo_hub_defaults(settings: Any) -> dict[str, Any]:
+    result = dict(settings) if isinstance(settings, dict) else {}
+    result["seo_hubs"] = seo_hubs_with_defaults(result)
+    return result
+
+
+def stamp_changed_seo_hubs(
+    before: Any,
+    after: Any,
+    timestamp: str,
+) -> dict[str, Any]:
+    """Set per-hub lastmod only when an editable field really changes."""
+
+    result = dict(after) if isinstance(after, dict) else {}
+    before_hubs = seo_hubs_with_defaults(before)
+    after_hubs = seo_hubs_with_defaults(result)
+
+    for slug, item in after_hubs.items():
+        previous = before_hubs.get(slug, {})
+        changed = any(previous.get(field) != item.get(field) for field in EDITABLE_SEO_HUB_FIELDS)
+        if changed:
+            item["content_updated_at"] = timestamp
+        elif previous.get("content_updated_at"):
+            item["content_updated_at"] = previous["content_updated_at"]
+
+    result["seo_hubs"] = after_hubs
+    return result
+
+
 def is_public_tour(tour: Any) -> bool:
     return bool(
         isinstance(tour, dict)
@@ -328,20 +405,42 @@ def _static_seo(path: str) -> dict[str, Any]:
         if isinstance(page, dict) and _clean_path(page.get("path", "")) == path:
             selected = page
             break
-    return {
+    home_content = home_page_content(settings) if path == "/" else None
+    result = {
         "title": selected.get("title") or fallback["title"],
         "description": selected.get("description") or fallback["description"],
-        "heading": fallback["heading"],
+        "heading": home_content["h1"] if home_content else fallback["heading"],
         "image": selected.get("image") or settings.get("seo_default_image") or DEFAULT_IMAGE,
         "no_index": bool(selected.get("no_index", False)),
         "type": "website",
     }
+    if path == "/":
+        faq_entities = []
+        for item in _home_faq_items():
+            faq_entities.append(
+                {
+                    "@type": "Question",
+                    "name": _strip_html(item.get("question")),
+                    "acceptedAnswer": {
+                        "@type": "Answer",
+                        "text": _strip_html(item.get("answer")),
+                    },
+                }
+            )
+        if faq_entities:
+            result["structured_data"] = {
+                "@type": "FAQPage",
+                "mainEntity": faq_entities,
+            }
+    return result
 
 
 def _landing_seo(path: str) -> dict[str, Any]:
     config = LANDING_PAGES[path]
+    selected = seo_hubs_with_defaults(_settings()).get(_seo_hub_slug(path), {})
     return {
         **config,
+        **selected,
         "image": DEFAULT_IMAGE,
         "no_index": False,
         "type": "website",
@@ -373,7 +472,7 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
     canonical_url = _record_canonical(tour, path)
     structured = {
         "@type": "TouristTrip",
-        "name": tour.get("seo_h1") or tour.get("title"),
+        "name": tour.get("title"),
         "description": _limit(description, 220),
         "url": canonical_url,
         "image": _absolute_url(_tour_image(tour)),
@@ -383,7 +482,7 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
     return {
         "title": tour.get("seo_title") or f"{tour.get('title', 'Тур')} | TRAVELSPACE",
         "description": description,
-        "heading": tour.get("seo_h1") or tour.get("title"),
+        "heading": tour.get("title"),
         "image": _tour_image(tour),
         "canonical_url": canonical_url,
         "no_index": bool(tour.get("seo_noindex", False)),
@@ -604,6 +703,61 @@ def _flatten_text(value: Any) -> list[str]:
     return []
 
 
+def _safe_rich_href(value: Any) -> str | None:
+    href = str(value or "").strip()
+    if href.startswith("/") and not href.startswith("//"):
+        return href
+    parsed = urlparse(href)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return href
+    return None
+
+
+def _render_rich_text_segment(value: Any) -> str:
+    rendered = escape(str(value or ""))
+    rendered = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", rendered)
+    rendered = re.sub(r"__([^_]+)__", r"<u>\1</u>", rendered)
+    rendered = re.sub(r"(?<!_)_([^_]+)_(?!_)", r"<em>\1</em>", rendered)
+    return rendered
+
+
+def _render_rich_inline(value: Any) -> str:
+    text = str(value or "")
+    result: list[str] = []
+    cursor = 0
+    for match in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
+        result.append(_render_rich_text_segment(text[cursor : match.start()]))
+        label, raw_href = match.groups()
+        href = _safe_rich_href(raw_href)
+        if href:
+            result.append(
+                f'<a href="{escape(href, quote=True)}">'
+                f"{_render_rich_text_segment(label)}</a>"
+            )
+        else:
+            result.append(_render_rich_text_segment(label))
+        cursor = match.end()
+    result.append(_render_rich_text_segment(text[cursor:]))
+    return "".join(result)
+
+
+def _render_rich_paragraphs(value: Any, limit: int | None = None) -> str:
+    if not isinstance(value, str):
+        return _render_paragraphs(value, limit=limit)
+    blocks = [
+        block.strip()
+        for block in re.split(r"\n\s*\n", value.replace("\r\n", "\n"))
+        if block.strip()
+    ]
+    selected = blocks if limit is None else blocks[:limit]
+    return "".join(
+        "<p>"
+        + "<br />".join(_render_rich_inline(line) for line in block.split("\n"))
+        + "</p>"
+        for block in selected
+    )
+
+
 def _render_paragraphs(value: Any, limit: int | None = 8, semantic_headings: bool = False) -> str:
     chunks: list[str] = []
     if isinstance(value, str):
@@ -626,6 +780,19 @@ def _render_paragraphs(value: Any, limit: int | None = 8, semantic_headings: boo
 
 def _link(path: str, label: Any) -> str:
     return f'<a href="{escape(_page_url(path), quote=True)}">{escape(_strip_html(label))}</a>'
+
+
+def _content_order(item: dict[str, Any]) -> tuple[float, str]:
+    try:
+        order = float(item.get("order", 9999))
+    except (TypeError, ValueError):
+        order = 9999
+    return order, str(item.get("question") or item.get("title") or "")
+
+
+def _home_faq_items() -> list[dict[str, Any]]:
+    items = [item for item in list_items("faq") if is_home_faq(item)]
+    return sorted(items, key=_content_order)
 
 
 def _render_list(value: Any) -> str:
@@ -730,7 +897,9 @@ def _tour_list(tours: Iterable[dict[str, Any]]) -> str:
         description = tour.get("short_description") or tour.get("tagline") or tour.get("description")
         items.append(
             "<li>"
+            + "<h3>"
             + _link(f"/tours/{tour['slug']}", tour.get("title") or "Тур")
+            + "</h3>"
             + (f"<p>{escape(_limit(description, 240))}</p>" if description else "")
             + "</li>"
         )
@@ -752,6 +921,99 @@ def _global_navigation() -> str:
     return '<nav aria-label="Основная навигация">' + " ".join(_link(path, label) for path, label in links) + "</nav>"
 
 
+def _render_homepage_sections() -> str:
+    settings = _settings()
+    content = home_page_content(settings)
+    parts = [
+        f"<h2>{escape(content['intro_title'])}</h2>",
+        _render_rich_paragraphs(content["intro_text"]),
+        f"<h2>{escape(content['tours_title'])}</h2>",
+        _tour_list(tour for tour in list_items("tours") if is_public_tour(tour) and not _tour_is_air(tour)),
+        f"<h2>{escape(content['directions_title'])}</h2>",
+    ]
+
+    for section in content["directions_sections"]:
+        title = _strip_html(section.get("title"))
+        body = _render_rich_paragraphs(section.get("text"))
+        if not title and not body:
+            continue
+        parts.append("<section>")
+        if title:
+            parts.append(f"<h3>{escape(title)}</h3>")
+        if body:
+            parts.append(body)
+        link_label = _strip_html(section.get("link_label"))
+        link_url = _safe_rich_href(section.get("link_url"))
+        if link_label and link_url:
+            parts.append(
+                f'<p><a href="{escape(link_url, quote=True)}">'
+                f"{escape(link_label)}</a></p>"
+            )
+        parts.append("</section>")
+
+    benefits = home_benefits_content(settings)
+    benefits_heading = _strip_html(benefits.get("overline")) or "Почему едут именно с нами"
+    benefits_subtitle = _strip_html(benefits.get("title")) or "Заботимся о каждой детали поездки"
+    parts.append(f"<h2>{escape(benefits_heading)}</h2>")
+    if benefits_subtitle and benefits_subtitle != benefits_heading:
+        parts.append(f"<p>{escape(benefits_subtitle)}</p>")
+    benefit_items = benefits.get("items") if isinstance(benefits.get("items"), list) else []
+    if benefit_items:
+        parts.append("<ul>")
+        for item in benefit_items:
+            if not isinstance(item, dict):
+                continue
+            title = _strip_html(item.get("title"))
+            description = _strip_html(item.get("desc"))
+            if title or description:
+                parts.append(
+                    "<li>"
+                    + (f"<h3>{escape(title)}</h3>" if title else "")
+                    + (f"<p>{escape(description)}</p>" if description else "")
+                    + "</li>"
+                )
+        parts.append("</ul>")
+
+    reviews = [item for item in list_items("reviews") if item.get("active", True)]
+    reviews.sort(key=_content_order)
+    if reviews:
+        parts.append("<h2>Отзывы туристов</h2><ul>")
+        for review in reviews[:4]:
+            author = _strip_html(review.get("name")) or "Турист"
+            text = _strip_html(review.get("text"))
+            parts.append(
+                f"<li><h3>{escape(author)}</h3>"
+                + (f"<p>{escape(_limit(text, 500))}</p>" if text else "")
+                + "</li>"
+            )
+        parts.append("</ul>")
+
+    promotions = [item for item in list_items("promotions") if item.get("active", True)]
+    if promotions:
+        parts.append("<h2>Актуальные акции</h2><ul>")
+        for promotion in promotions[:3]:
+            title = _strip_html(promotion.get("title"))
+            description = _strip_html(promotion.get("description"))
+            parts.append(
+                "<li>"
+                + (f"<h3>{escape(title)}</h3>" if title else "")
+                + (f"<p>{escape(_limit(description, 500))}</p>" if description else "")
+                + "</li>"
+            )
+        parts.append("</ul>")
+
+    faq_items = _home_faq_items()
+    if faq_items:
+        parts.append(f"<h2>{escape(content['faq_title'])}</h2>")
+        for item in faq_items:
+            parts.append(
+                f"<section><h3>{escape(_strip_html(item.get('question')))}</h3>"
+                f"{_render_rich_paragraphs(item.get('answer'))}</section>"
+            )
+
+    return "".join(parts)
+
+
 def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
     heading = escape(_strip_html(seo.get("heading") or seo.get("title") or DEFAULT_TITLE))
     parts = [
@@ -760,16 +1022,16 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         f"<main><h1>{heading}</h1>",
         f"<p>{escape(_limit(seo.get('description'), 360))}</p>",
     ]
-    if path == "/" or path == "/tours":
+    if path == "/":
+        parts.append("<p>Туры, в которые хочется возвращаться</p>")
+        parts.append(_render_homepage_sections())
+    elif path == "/tours":
         parts.append("<h2>Актуальные туры</h2>")
         parts.append(_tour_list(tour for tour in list_items("tours") if is_public_tour(tour)))
-        if path == "/":
-            articles = [article for article in list_items("articles") if is_public_article(article)]
-            if articles:
-                parts.append("<h2>Полезное о путешествиях</h2><ul>")
-                parts.extend(f"<li>{_link('/blog/' + article['slug'], article.get('title'))}</li>" for article in articles)
-                parts.append("</ul>")
     elif path in LANDING_PAGES:
+        intro = _render_rich_paragraphs(seo.get("intro"))
+        if intro:
+            parts.append(intro)
         parts.append("<h2>Подходящие программы</h2>")
         parts.append(_tour_list(tours_for_landing(path)))
         parts.append("<h2>Как выбрать тур</h2><p>Сравните даты, длительность, программу и включённые услуги. Менеджер TRAVELSPACE поможет подобрать подходящую поездку и ответит на вопросы.</p>")
@@ -858,8 +1120,22 @@ def _sitemap_date(value: Any) -> str | None:
 
 
 def build_sitemap_xml() -> str:
-    entries: list[tuple[str, str | None]] = [(path, None) for path in STATIC_PAGE_FALLBACKS]
-    entries.extend((path, None) for path in LANDING_PAGES)
+    settings = _settings()
+    home_lastmod = _sitemap_date(settings.get("home_content_updated_at"))
+    seo_hubs = seo_hubs_with_defaults(settings)
+    entries: list[tuple[str, str | None]] = [
+        (path, home_lastmod if path == "/" else None)
+        for path in STATIC_PAGE_FALLBACKS
+    ]
+    entries.extend(
+        (
+            path,
+            _sitemap_date(
+                seo_hubs.get(_seo_hub_slug(path), {}).get("content_updated_at")
+            ),
+        )
+        for path in LANDING_PAGES
+    )
     for tour in list_items("tours"):
         if is_indexable_tour(tour):
             entries.append((f"/tours/{tour['slug']}", _sitemap_date(tour.get("seo_lastmod") or tour.get("content_updated_at") or tour.get("updated_at") or tour.get("created_at"))))

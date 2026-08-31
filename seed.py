@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from homepage import DEFAULT_HOME_BENEFITS, DEFAULT_HOME_PAGE
 from storage import DATA_DIR, save
 
 
@@ -568,6 +569,7 @@ FAQ = [
         "category": "Оплата",
         "question": "Как оплатить тур?",
         "answer": "После общения с менеджером и подписания договора мы выдаём номер договора, и вы оплачиваете через ЕРИП в любом удобном банке или мобильном приложении.",
+        "show_on_home": True,
         "order": 1,
         "active": True,
     },
@@ -576,6 +578,7 @@ FAQ = [
         "category": "Документы",
         "question": "Какие документы нужны для тура?",
         "answer": "Для туров в Россию (Дагестан, СПб, Карелия) — внутренний или загранпаспорт. Для Грузии — загранпаспорт со сроком действия 6+ месяцев.",
+        "show_on_home": True,
         "order": 2,
         "active": True,
     },
@@ -584,6 +587,7 @@ FAQ = [
         "category": "Автобус",
         "question": "Можно ли заранее выбрать место в автобусе?",
         "answer": "Выбор места в автобусе возможен за дополнительную плату. Наличие конкретных мест уточняйте у менеджера.",
+        "show_on_home": True,
         "order": 3,
         "active": True,
     },
@@ -592,6 +596,7 @@ FAQ = [
         "category": "Дети",
         "question": "Есть ли скидки для детей?",
         "answer": "Да, для детей до 12 лет предусмотрены скидки. Точная стоимость уточняется у менеджера в зависимости от тура.",
+        "show_on_home": True,
         "order": 4,
         "active": True,
     },
@@ -600,6 +605,7 @@ FAQ = [
         "category": "Заявка",
         "question": "Как оставить заявку?",
         "answer": "Через форму на сайте, по телефону или в любом удобном мессенджере. Мы перезвоним в течение часа в рабочее время.",
+        "show_on_home": True,
         "order": 5,
         "active": True,
     },
@@ -608,6 +614,7 @@ FAQ = [
         "category": "Отмена",
         "question": "Можно ли отказаться от тура?",
         "answer": "Условия отмены прописаны в договоре. До определённого срока возврат возможен с минимальной комиссией. Подробности уточняйте у менеджера.",
+        "show_on_home": True,
         "order": 6,
         "active": True,
     },
@@ -647,6 +654,9 @@ SETTINGS = {
     "work_hours": "Ежедневно с 10:00 до 19:00",
     "unp": "100000000",
     "legal_name": 'ООО "Туроператор" (демо-данные)',
+    "home_page": DEFAULT_HOME_PAGE,
+    "home_benefits": DEFAULT_HOME_BENEFITS,
+    "home_content_updated_at": "2026-08-24T00:00:00+03:00",
     "header_phones": [
         {"label": "Грузия и Дагестан", "phone": "636-99-11", "link": "+375296369911"},
         {"label": "Питер и Карелия", "phone": "636-22-99", "link": "+375296362299"},
