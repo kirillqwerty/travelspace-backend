@@ -216,6 +216,20 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
                 "description": "Новое описание хаба.",
                 "heading": "Новый H1 Санкт-Петербурга",
                 "intro": "Первый абзац.\n\n[Подробный тур](/tours/public-tour).",
+                "content_title": "Полезный H2 после каталога",
+                "content_body": "Основной текст со [ссылкой](/tours/gruziya).",
+                "content_sections": [
+                    {"title": "Первый H3", "text": "Текст первого подраздела."},
+                    {"title": "Второй H3", "text": "Текст второго подраздела."},
+                ],
+                "how_to_title": "Как выбрать тур в Санкт-Петербург",
+                "faq_title": "Частые вопросы о Санкт-Петербурге",
+                "faq_items": [
+                    {
+                        "question": "Как забронировать поездку?",
+                        "answer": "Выберите дату и оставьте [заявку](/contacts).",
+                    }
+                ],
                 "content_updated_at": "2026-08-28T12:00:00+03:00",
             }
         },
@@ -229,10 +243,49 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
     assert seo["description"] == "Новое описание хаба."
     assert "<h1>Новый H1 Санкт-Петербурга</h1>" in snapshot
     assert '<a href="/tours/public-tour">Подробный тур</a>' in snapshot
+    assert "<h2>Полезный H2 после каталога</h2>" in snapshot
+    assert "<h3>Первый H3</h3>" in snapshot
+    assert '<a href="/tours/gruziya">ссылкой</a>' in snapshot
+    assert "<h2>Как выбрать тур в Санкт-Петербург</h2>" in snapshot
+    assert "<h2>Другие направления</h2>" in snapshot
+    assert "<h2>Частые вопросы о Санкт-Петербурге</h2>" in snapshot
+    assert "<h3>Как забронировать поездку?</h3>" in snapshot
+    assert '<a href="/contacts">заявку</a>' in snapshot
+    assert snapshot.index("<h2>Подходящие программы</h2>") < snapshot.index(
+        "<h2>Полезный H2 после каталога</h2>"
+    )
+    assert snapshot.index("<h2>Полезный H2 после каталога</h2>") < snapshot.index(
+        "<h2>Как выбрать тур в Санкт-Петербург</h2>"
+    )
+    assert snapshot.index("<h2>Другие направления</h2>") < snapshot.index(
+        "<h2>Частые вопросы о Санкт-Петербурге</h2>"
+    )
+    meta = seo_runtime._render_meta_block("/tours/sankt-peterburg", seo)
+    assert '"@type":"FAQPage"' in meta
+    assert "Как забронировать поездку?" in meta
+    assert "[заявку]" not in meta
     assert (
         "<loc>https://travelspace.by/tours/sankt-peterburg</loc>\n"
         "    <lastmod>2026-08-28</lastmod>"
         in sitemap
+    )
+
+
+def test_bus_hub_has_complete_editable_content_defaults(monkeypatch):
+    configure_storage(monkeypatch)
+    SETTINGS.pop("seo_hubs", None)
+
+    seo = seo_runtime.get_seo_for_path("/tours/avtobusnye-iz-minska")
+    snapshot = seo_runtime._render_snapshot("/tours/avtobusnye-iz-minska", seo)
+
+    assert seo["content_title"].startswith("Автобусные туры из Беларуси")
+    assert len(seo["content_sections"]) == 4
+    assert len(seo["faq_items"]) == 8
+    assert "<h3>Экскурсионные автобусные туры</h3>" in snapshot
+    assert "<h2>Как выбрать автобусный тур из Минска</h2>" in snapshot
+    assert "<h2>Частые вопросы об автобусных турах из Минска</h2>" in snapshot
+    assert '"@type":"FAQPage"' in seo_runtime._render_meta_block(
+        "/tours/avtobusnye-iz-minska", seo
     )
 
 

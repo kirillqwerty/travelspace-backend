@@ -93,3 +93,36 @@ def test_only_changed_seo_hub_receives_new_lastmod():
         stamped["seo_hubs"]["gruziya"]["content_updated_at"]
         == "2026-08-28T16:00:00+03:00"
     )
+
+
+def test_changed_hub_faq_receives_new_lastmod():
+    before = {
+        "seo_hubs": {
+            "gruziya": {
+                "title": "Title",
+                "description": "Описание",
+                "heading": "Туры в Грузию",
+                "intro": "Вводный текст",
+                "faq_title": "Частые вопросы",
+                "faq_items": [
+                    {"question": "Как забронировать?", "answer": "Оставьте заявку."}
+                ],
+                "content_updated_at": "2026-08-20T10:00:00+03:00",
+            }
+        }
+    }
+    after = deepcopy(before)
+    after["seo_hubs"]["gruziya"]["faq_items"][0]["answer"] = (
+        "Выберите дату и оставьте заявку."
+    )
+
+    stamped = stamp_changed_seo_hubs(
+        before,
+        after,
+        "2026-08-31T12:00:00+03:00",
+    )
+
+    assert (
+        stamped["seo_hubs"]["gruziya"]["content_updated_at"]
+        == "2026-08-31T12:00:00+03:00"
+    )

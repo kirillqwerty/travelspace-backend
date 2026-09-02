@@ -28,9 +28,9 @@ INDEX_HTML_PATH = FRONTEND_BUILD_DIR / "index.html"
 # one public host. Override only through the dedicated SEO setting.
 PUBLIC_SITE_URL = os.environ.get("CANONICAL_SITE_URL", "https://travelspace.by").rstrip("/")
 SITE_NAME = "TRAVELSPACE"
-DEFAULT_TITLE = "TRAVELSPACE — автобусные и авиационные туры из Минска"
+DEFAULT_TITLE = "TRAVELSPACE — автобусные и авиа туры из Минска"
 DEFAULT_DESCRIPTION = (
-    "Авторские автобусные и авиационные туры из Минска: Грузия, Дагестан, "
+    "Авторские автобусные и авиа туры из Минска: Грузия, Дагестан, "
     "Санкт-Петербург, Карелия и другие направления."
 )
 DEFAULT_IMAGE = "/og-image.jpg"
@@ -38,13 +38,13 @@ DEFAULT_IMAGE = "/og-image.jpg"
 
 STATIC_PAGE_FALLBACKS: dict[str, dict[str, str]] = {
     "/": {
-        "title": "TRAVELSPACE — автобусные и авиационные туры из Минска",
+        "title": "TRAVELSPACE — автобусные и авиа туры из Минска",
         "description": "Туры из Минска в Грузию, Дагестан, Санкт-Петербург, Карелию, Турцию и другие направления.",
         "heading": "Авторские туры из Минска",
     },
     "/tours": {
         "title": "Каталог туров из Минска | TRAVELSPACE",
-        "description": "Актуальные автобусные и авиационные туры из Минска: даты, цены, программа и бронирование.",
+        "description": "Актуальные автобусные и авиа туры из Минска: даты, цены, программа и бронирование.",
         "heading": "Все туры из Минска",
     },
     "/about": {
@@ -95,19 +95,95 @@ STATIC_PAGE_FALLBACKS: dict[str, dict[str, str]] = {
 }
 
 
+EMPTY_LANDING_CONTENT: dict[str, Any] = {
+    "content_title": "",
+    "content_body": "",
+    "content_sections": [],
+    "how_to_title": "Как выбрать тур",
+    "faq_title": "",
+    "faq_items": [],
+}
+
+BUS_LANDING_CONTENT: dict[str, Any] = {
+    "content_title": "Автобусные туры из Беларуси: направления, цены и формат поездок",
+    "content_body": (
+        "Автобусные туры из Минска подходят для экскурсионных поездок, отдыха у моря и путешествий по природным маршрутам. "
+        "В одном месте можно сравнить даты, продолжительность, программу и стоимость, а затем открыть страницу выбранного тура и изучить подробности.\n\n"
+        "В каталоге собраны актуальные [автобусные туры из Минска](/tours): доступность мест и окончательную стоимость на выбранную дату подтверждает менеджер TRAVELSPACE. "
+        "Такой формат помогает заранее оценить бюджет и выбрать поездку, которая подходит по темпу, маршруту и продолжительности."
+    ),
+    "content_sections": [
+        {
+            "title": "Экскурсионные автобусные туры",
+            "text": "Для насыщенной экскурсионной программы подойдут поездки в [Санкт-Петербург](/tours/sankt-peterburg), [Дагестан](/tours/dagestan), [Карелию](/tours/kareliya) и [Арктику](/tours/arktika). На странице каждого направления собраны подходящие программы, ближайшие даты и основные условия поездки.",
+        },
+        {
+            "title": "Автобусные туры на море",
+            "text": "Поездки в [Грузию](/tours/gruziya) и [Абхазию](/tours/abhaziya) позволяют совместить организованный переезд, проживание, отдых у моря и экскурсии. Перед бронированием сравните продолжительность отдыха, расположение отеля и услуги, включённые в стоимость.",
+        },
+        {
+            "title": "Откуда отправляются автобусы",
+            "text": "Основным городом отправления является Минск. Возможные посадки в других городах Беларуси зависят от конкретного маршрута и даты. Актуальные города и точки посадки указаны на странице тура; при оформлении заявки менеджер подтвердит удобный вариант.",
+        },
+        {
+            "title": "Что входит в стоимость поездки",
+            "text": "Состав стоимости зависит от программы. Обычно отдельно указаны проезд, проживание, экскурсии, питание и дополнительные расходы. Проверяйте блоки «В стоимость включено» и «В стоимость не включено» на странице выбранного тура, чтобы корректно сравнить предложения.",
+        },
+    ],
+    "how_to_title": "Как выбрать автобусный тур из Минска",
+    "faq_title": "Частые вопросы об автобусных турах из Минска",
+    "faq_items": [
+        {
+            "question": "Какие автобусные туры из Минска доступны сейчас?",
+            "answer": "Актуальные программы и даты показаны в каталоге выше. Если подходящей даты пока нет, оставьте заявку — менеджер проверит ближайшие выезды и предложит альтернативы.",
+        },
+        {
+            "question": "Куда можно поехать на автобусе из Беларуси?",
+            "answer": "В каталоге представлены экскурсионные поездки и туры на море. Среди направлений — Санкт-Петербург, Дагестан, Карелия, Арктика, Грузия, Абхазия и другие маршруты.",
+        },
+        {
+            "question": "Из каких городов Беларуси есть отправления?",
+            "answer": "Основной город отправления — Минск. Дополнительные города посадки зависят от маршрута и даты и указываются на странице конкретного тура.",
+        },
+        {
+            "question": "Что входит в стоимость автобусного тура?",
+            "answer": "Для каждого тура состав стоимости указан отдельно. На странице программы можно проверить, включены ли проезд, проживание, экскурсии и питание, а также увидеть возможные дополнительные расходы.",
+        },
+        {
+            "question": "Сколько обычно длится автобусный тур?",
+            "answer": "Продолжительность зависит от направления и программы. Количество дней и ночей указано в карточке и на подробной странице каждого тура.",
+        },
+        {
+            "question": "Можно ли выбрать место в автобусе?",
+            "answer": "Возможность выбора места зависит от конкретной поездки и схемы автобуса. Сообщите пожелание менеджеру при бронировании — он уточнит доступные варианты.",
+        },
+        {
+            "question": "Как забронировать автобусный тур?",
+            "answer": "Выберите программу и дату, затем оставьте заявку на сайте. Менеджер свяжется с вами, подтвердит наличие мест, итоговую стоимость и порядок оформления.",
+        },
+        {
+            "question": "Какие документы нужны для поездки?",
+            "answer": "Перечень документов зависит от страны, маршрута и возраста туриста. Перед оплатой менеджер сообщит актуальные требования для выбранной поездки.",
+        },
+    ],
+}
+
+
 LANDING_PAGES: dict[str, dict[str, Any]] = {
     "/tours/avtobusnye-iz-minska": {
         "title": "Автобусные туры из Минска 2026 | TRAVELSPACE",
         "description": "Автобусные туры из Минска в Грузию, Дагестан, Санкт-Петербург, Карелию, Абхазию и другие направления.",
         "heading": "Автобусные туры из Минска",
         "intro": "Готовые групповые маршруты с продуманной программой, сопровождением и удобными датами выезда. Сравните направления и выберите подходящую поездку.",
+        **BUS_LANDING_CONTENT,
         "kind": "bus",
     },
     "/tours/avia-iz-minska": {
-        "title": "Авиационные туры из Минска 2026 | TRAVELSPACE",
+        "title": "Авиа туры из Минска 2026 | TRAVELSPACE",
         "description": "Туры с перелётом из Минска: актуальные направления, программы, даты и стоимость поездок.",
-        "heading": "Авиационные туры из Минска",
+        "heading": "Авиа туры из Минска",
         "intro": "Путешествия с перелётом для тех, кто хочет быстрее добраться до места отдыха. В карточках указаны программа, даты и состав стоимости.",
+        "how_to_title": "Как выбрать авиа тур из Минска",
         "kind": "air",
     },
     "/tours/gruziya": {
@@ -115,6 +191,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Туры в Грузию из Минска: отдых на море, экскурсии, даты, программа и стоимость поездки.",
         "heading": "Туры в Грузию из Минска",
         "intro": "Поездки в Грузию сочетают море, горные пейзажи, национальную кухню и экскурсии. На странице собраны актуальные программы TRAVELSPACE.",
+        "how_to_title": "Как выбрать тур в Грузию из Минска",
         "keywords": ("груз", "gruzi"),
     },
     "/tours/sankt-peterburg": {
@@ -122,6 +199,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Туры в Санкт-Петербург и Питер из Минска на выходные: программа, даты, отели и стоимость.",
         "heading": "Туры в Санкт-Петербург из Минска",
         "intro": "Автобусные поездки в Санкт-Петербург из Минска с насыщенной экскурсионной программой. Выберите дату и изучите подробный маршрут тура.",
+        "how_to_title": "Как выбрать тур в Санкт-Петербург из Минска",
         "keywords": ("петербург", "питер", "peterburg"),
     },
     "/tours/dagestan": {
@@ -129,6 +207,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Автобусные туры в Дагестан из Минска: горы, каньоны, экскурсии, даты и стоимость.",
         "heading": "Туры в Дагестан из Минска",
         "intro": "Горные маршруты, Сулакский каньон, древние аулы и Каспийское море в одной поездке. Ниже — актуальные программы и даты.",
+        "how_to_title": "Как выбрать тур в Дагестан из Минска",
         "keywords": ("дагест", "dagestan"),
     },
     "/tours/kareliya": {
@@ -136,6 +215,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Автобусные туры в Карелию из Минска: Рускеала, Кижи, Ладожские шхеры, даты и программа.",
         "heading": "Туры в Карелию из Минска",
         "intro": "Карельская природа, горный парк Рускеала, остров Кижи и Ладожские шхеры. Сравните программу и доступные даты поездки.",
+        "how_to_title": "Как выбрать тур в Карелию из Минска",
         "keywords": ("карел", "kareli"),
     },
     "/tours/abhaziya": {
@@ -143,6 +223,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Автобусные туры в Абхазию из Минска: море, экскурсии, программа, даты и стоимость.",
         "heading": "Туры в Абхазию из Минска",
         "intro": "Отдых у моря с экскурсионной программой и организованным выездом из Минска. Изучите маршрут, отели и ближайшие даты.",
+        "how_to_title": "Как выбрать тур в Абхазию из Минска",
         "keywords": ("абхаз", "abhaz"),
     },
     "/tours/severnaya-osetiya": {
@@ -150,6 +231,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Автобусные туры в Северную Осетию из Минска: горные маршруты, программа, даты и цены.",
         "heading": "Туры в Северную Осетию из Минска",
         "intro": "Горные ущелья, древние башни и живописные дороги Северной Осетии. На странице собраны доступные программы TRAVELSPACE.",
+        "how_to_title": "Как выбрать тур в Северную Осетию из Минска",
         "keywords": ("осети", "oseti"),
     },
     "/tours/moskva": {
@@ -157,6 +239,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Туры в Москву из Минска на выходные: экскурсионная программа, даты, отель и стоимость.",
         "heading": "Туры в Москву из Минска",
         "intro": "Короткие автобусные поездки в Москву из Минска для насыщенных выходных. Проверьте программу, даты и включённые услуги.",
+        "how_to_title": "Как выбрать тур в Москву из Минска",
         "keywords": ("москв", "moskv"),
     },
     "/tours/arktika": {
@@ -164,6 +247,7 @@ LANDING_PAGES: dict[str, dict[str, Any]] = {
         "description": "Автобусные туры в Арктику из Минска: программа поездки, даты, маршрут и стоимость.",
         "heading": "Туры в Арктику из Минска",
         "intro": "Поездки за Полярный круг, северные пейзажи и необычная экскурсионная программа. На странице появятся актуальные даты и маршруты TRAVELSPACE.",
+        "how_to_title": "Как выбрать тур в Арктику из Минска",
         "keywords": ("аркти", "arkti"),
     },
 }
@@ -204,6 +288,11 @@ def _strip_html(value: Any) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
     text = re.sub(r"[*_`#>]+", " ", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _strip_rich_text(value: Any) -> str:
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", str(value or ""))
+    return _strip_html(text)
 
 
 def _limit(value: Any, max_len: int) -> str:
@@ -273,7 +362,45 @@ def _settings() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-EDITABLE_SEO_HUB_FIELDS = ("title", "description", "heading", "intro")
+REQUIRED_SEO_HUB_FIELDS = ("title", "description", "heading", "intro")
+OPTIONAL_SEO_HUB_FIELDS = (
+    "content_title",
+    "content_body",
+    "how_to_title",
+    "faq_title",
+)
+SEO_HUB_LIST_FIELDS = ("content_sections", "faq_items")
+EDITABLE_SEO_HUB_FIELDS = (
+    *REQUIRED_SEO_HUB_FIELDS,
+    *OPTIONAL_SEO_HUB_FIELDS,
+    *SEO_HUB_LIST_FIELDS,
+)
+
+
+def _seo_hub_sections(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {
+            "title": str(item.get("title") or "").strip(),
+            "text": str(item.get("text") or "").strip(),
+        }
+        for item in value[:4]
+        if isinstance(item, dict)
+    ]
+
+
+def _seo_hub_faq(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    return [
+        {
+            "question": str(item.get("question") or "").strip(),
+            "answer": str(item.get("answer") or "").strip(),
+        }
+        for item in value[:8]
+        if isinstance(item, dict)
+    ]
 
 
 def _seo_hub_slug(path: str) -> str:
@@ -290,14 +417,35 @@ def seo_hubs_with_defaults(settings: Any) -> dict[str, dict[str, Any]]:
         slug = _seo_hub_slug(path)
         selected = configured.get(slug)
         selected = selected if isinstance(selected, dict) else {}
+        defaults = {**EMPTY_LANDING_CONTENT, **fallback}
         item: dict[str, Any] = {"path": path}
-        for field in EDITABLE_SEO_HUB_FIELDS:
+
+        for field in REQUIRED_SEO_HUB_FIELDS:
             value = selected.get(field)
             item[field] = (
                 str(value).strip()
                 if isinstance(value, str) and value.strip()
-                else fallback.get(field, "")
+                else defaults.get(field, "")
             )
+
+        for field in OPTIONAL_SEO_HUB_FIELDS:
+            item[field] = (
+                str(selected.get(field) or "").strip()
+                if field in selected
+                else str(defaults.get(field) or "").strip()
+            )
+
+        item["content_sections"] = _seo_hub_sections(
+            selected["content_sections"]
+            if "content_sections" in selected
+            else defaults.get("content_sections")
+        )
+        item["faq_items"] = _seo_hub_faq(
+            selected["faq_items"]
+            if "faq_items" in selected
+            else defaults.get("faq_items")
+        )
+
         if selected.get("content_updated_at"):
             item["content_updated_at"] = selected["content_updated_at"]
         result[slug] = item
@@ -438,13 +586,33 @@ def _static_seo(path: str) -> dict[str, Any]:
 def _landing_seo(path: str) -> dict[str, Any]:
     config = LANDING_PAGES[path]
     selected = seo_hubs_with_defaults(_settings()).get(_seo_hub_slug(path), {})
-    return {
+    result = {
         **config,
         **selected,
         "image": DEFAULT_IMAGE,
         "no_index": False,
         "type": "website",
     }
+    faq_entities = [
+        {
+            "@type": "Question",
+            "name": _strip_rich_text(item.get("question")),
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": _strip_rich_text(item.get("answer")),
+            },
+        }
+        for item in selected.get("faq_items", [])
+        if isinstance(item, dict)
+        and _strip_rich_text(item.get("question"))
+        and _strip_rich_text(item.get("answer"))
+    ]
+    if faq_entities:
+        result["structured_data"] = {
+            "@type": "FAQPage",
+            "mainEntity": faq_entities,
+        }
+    return result
 
 
 def _not_found(kind: str = "Страница") -> dict[str, Any]:
@@ -910,7 +1078,7 @@ def _global_navigation() -> str:
     links = [
         ("/tours", "Все туры"),
         ("/tours/avtobusnye-iz-minska", "Автобусные туры"),
-        ("/tours/avia-iz-minska", "Авиационные туры"),
+        ("/tours/avia-iz-minska", "Авиа туры"),
         ("/tours/gruziya", "Грузия"),
         ("/tours/sankt-peterburg", "Санкт-Петербург"),
         ("/tours/dagestan", "Дагестан"),
@@ -1014,6 +1182,73 @@ def _render_homepage_sections() -> str:
     return "".join(parts)
 
 
+def _render_seo_hub_content(seo: dict[str, Any]) -> str:
+    title = _strip_html(seo.get("content_title"))
+    body = _render_rich_paragraphs(seo.get("content_body"))
+    sections = seo.get("content_sections")
+    sections = sections if isinstance(sections, list) else []
+
+    rendered_sections: list[str] = []
+    for item in sections:
+        if not isinstance(item, dict):
+            continue
+        section_title = _strip_html(item.get("title"))
+        section_body = _render_rich_paragraphs(item.get("text"))
+        if not section_title or not section_body:
+            continue
+        rendered_sections.append(
+            "<section>"
+            + (f"<h3>{escape(section_title)}</h3>" if section_title else "")
+            + section_body
+            + "</section>"
+        )
+
+    if not title or not (body or rendered_sections):
+        return ""
+    return (
+        "<section>"
+        + (f"<h2>{escape(title)}</h2>" if title else "")
+        + body
+        + "".join(rendered_sections)
+        + "</section>"
+    )
+
+
+def _render_seo_hub_faq(seo: dict[str, Any]) -> str:
+    title = _strip_html(seo.get("faq_title")) or "Частые вопросы о турах"
+    faq_items = seo.get("faq_items")
+    faq_items = faq_items if isinstance(faq_items, list) else []
+    rendered: list[str] = []
+
+    for item in faq_items:
+        if not isinstance(item, dict):
+            continue
+        question = _strip_html(item.get("question"))
+        answer = _render_rich_paragraphs(item.get("answer"))
+        if question and answer:
+            rendered.append(
+                f"<section><h3>{escape(question)}</h3>{answer}</section>"
+            )
+
+    if not rendered:
+        return ""
+    return (
+        "<section>"
+        + f"<h2>{escape(title)}</h2>"
+        + "".join(rendered)
+        + "</section>"
+    )
+
+
+def _render_other_seo_hubs(current_path: str) -> str:
+    links = [
+        f"<li>{_link(path, config.get('heading') or 'Туры')}</li>"
+        for path, config in LANDING_PAGES.items()
+        if path != current_path
+    ]
+    return "<h2>Другие направления</h2><ul>" + "".join(links) + "</ul>"
+
+
 def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
     heading = escape(_strip_html(seo.get("heading") or seo.get("title") or DEFAULT_TITLE))
     parts = [
@@ -1034,7 +1269,15 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             parts.append(intro)
         parts.append("<h2>Подходящие программы</h2>")
         parts.append(_tour_list(tours_for_landing(path)))
-        parts.append("<h2>Как выбрать тур</h2><p>Сравните даты, длительность, программу и включённые услуги. Менеджер TRAVELSPACE поможет подобрать подходящую поездку и ответит на вопросы.</p>")
+        content = _render_seo_hub_content(seo)
+        if content:
+            parts.append(content)
+        how_to_title = _strip_html(seo.get("how_to_title")) or "Как выбрать тур"
+        parts.append(f"<h2>{escape(how_to_title)}</h2><p>Сравните даты, длительность, программу и включённые услуги. Менеджер TRAVELSPACE поможет подобрать подходящую поездку и ответит на вопросы.</p>")
+        parts.append(_render_other_seo_hubs(path))
+        faq = _render_seo_hub_faq(seo)
+        if faq:
+            parts.append(faq)
     elif path == "/blog":
         parts.append("<ul>")
         for article in list_items("articles"):
