@@ -13,6 +13,7 @@ Options -Indexes
     ExpiresByType image/png A691200
     ExpiresByType image/jpeg A691200
     ExpiresByType image/webp A691200
+    ExpiresByType video/mp4 A2592000
     ExpiresByType text/css A691200
     ExpiresByType text/javascript A691200
     ExpiresByType application/javascript A691200
@@ -36,6 +37,18 @@ ErrorDocument 403 "Forbidden"
 
 RewriteEngine On
 
+# Do not touch SSL / CloudLinux / Let's Encrypt files.
+RewriteRule ^\.well-known/ - [L]
+
+# One HTTPS canonical origin for search engines and visitors. X-Forwarded-Proto
+# prevents a redirect loop when TLS is terminated before Apache/Passenger.
+RewriteCond %{HTTPS} !=on
+RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+RewriteRule ^ https://travelspace.by%{REQUEST_URI} [R=301,L,NE]
+
+RewriteCond %{HTTP_HOST} !^travelspace\.by$ [NC]
+RewriteRule ^ https://travelspace.by%{REQUEST_URI} [R=301,L,NE]
+
 # React build static files
 RewriteRule ^static/(.*)$ public/static/$1 [L]
 
@@ -45,13 +58,6 @@ RewriteRule ^manifest\.json$ public/manifest.json [L]
 RewriteRule ^asset-manifest\.json$ public/asset-manifest.json [L]
 RewriteRule ^background-journey\.mp4$ public/background-journey.mp4 [L]
 RewriteRule ^og-image\.jpg$ public/og-image.jpg [L]
-
-# Do not touch SSL / CloudLinux / Let's Encrypt files
-RewriteRule ^\.well-known/ - [L]
-
-# One canonical host for search engines and visitors.
-RewriteCond %{HTTP_HOST} ^www\.travelspace\.by$ [NC]
-RewriteRule ^ https://travelspace.by%{REQUEST_URI} [R=301,L,NE]
 
 # Everything else goes to Passenger / FastAPI
 

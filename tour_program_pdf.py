@@ -1,4 +1,4 @@
-"""One-page PDF tour program generator for public downloads."""
+"""Automatic multi-page PDF tour program generator for public downloads."""
 
 from __future__ import annotations
 
@@ -7,15 +7,28 @@ import os
 import re
 import unicodedata
 from datetime import date, datetime
+from html import escape as xml_escape
 from pathlib import Path
 from typing import Any
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+from reportlab.platypus import (
+    BaseDocTemplate,
+    Frame,
+    HRFlowable,
+    PageTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 
 PAGE_W, PAGE_H = A4
@@ -110,6 +123,7 @@ def _strip_rich_text(value: Any) -> str:
         " ",
         text,
     )
+    text = re.sub(r"(?i):(?:check|warning|minus):", "- ", text)
     text = text.replace("**", "").replace("__", "").replace("_", "")
     text = text.replace("\r", "\n")
     text = re.sub(r"<[^>]+>", " ", text)
@@ -789,13 +803,13 @@ def _draw_info_blocks(
             c.drawString(bx + 8, line_y, line)
             line_y -= leading
 
-def build_tour_program_pdf(
+def _build_one_page_legacy(
     tour: dict,
     settings: dict | None = None,
     upload_dir: Path | None = None,
     program_config: dict | None = None,
 ) -> bytes:
-    """Build a compact, strictly one-page PDF program for a tour."""
+    """Legacy one-page layout kept only for backwards-compatible internals."""
 
     settings = settings or {}
     program_config = program_config if isinstance(program_config, dict) else {
@@ -986,4 +1000,580 @@ def build_tour_program_pdf(
 
     c.showPage()
     c.save()
+    return buffer.getvalue()
+
+
+MEAL_LABELS = {
+    "breakfast": "завтрак",
+    "breakfast_lunch": "завтрак и обед",
+    "breakfast_dinner": "завтрак и ужин",
+    "breakfast_full": "трёхразовое питание",
+}
+
+
+def _pdf_plain(value: Any) -> str:
+    return (
+        _strip_rich_text(value)
+        .replace("—", "-")
+        .replace("–", "-")
+        .replace("→", "-")
+        .strip()
+    )
+
+
+def _pdf_markup(value: Any) -> str:
+    return xml_escape(_pdf_plain(value), quote=False).replace("\n", "<br/>")
+
+
+def _pdf_styles() -> dict[str, ParagraphStyle]:
+    return {
+        "body": ParagraphStyle(
+            "TravelBody",
+            fontName=FONT_REGULAR,
+            fontSize=9.2,
+            leading=12.4,
+            textColor=DARK,
+            spaceAfter=3.5,
+            allowWidows=0,
+            allowOrphans=0,
+        ),
+        "intro": ParagraphStyle(
+            "TravelIntro",
+            fontName=FONT_BOLD,
+            fontSize=10,
+            leading=13.5,
+            textColor=colors.HexColor("#374151"),
+            spaceAfter=5,
+        ),
+        "section": ParagraphStyle(
+            "TravelSection",
+            fontName=FONT_BOLD,
+            fontSize=14,
+            leading=17,
+            textColor=ORANGE_DARK,
+            spaceBefore=7,
+            spaceAfter=4,
+            keepWithNext=True,
+        ),
+        "subsection": ParagraphStyle(
+            "TravelSubsection",
+            fontName=FONT_BOLD,
+            fontSize=10.8,
+            leading=13.5,
+            textColor=DARK,
+            spaceBefore=4,
+            spaceAfter=2,
+            keepWithNext=True,
+        ),
+        "minor": ParagraphStyle(
+            "TravelMinor",
+            fontName=FONT_BOLD,
+            fontSize=9.2,
+            leading=12,
+            textColor=colors.HexColor("#374151"),
+            spaceBefore=2,
+            spaceAfter=1,
+            keepWithNext=True,
+        ),
+        "bullet": ParagraphStyle(
+            "TravelBullet",
+            fontName=FONT_REGULAR,
+            fontSize=9,
+            leading=12,
+            textColor=DARK,
+            leftIndent=12,
+            firstLineIndent=-8,
+            spaceAfter=2,
+        ),
+        "small": ParagraphStyle(
+            "TravelSmall",
+            fontName=FONT_REGULAR,
+            fontSize=7.7,
+            leading=10.2,
+            textColor=colors.HexColor("#4B5563"),
+        ),
+        "small_bold": ParagraphStyle(
+            "TravelSmallBold",
+            fontName=FONT_BOLD,
+            fontSize=7.7,
+            leading=10.2,
+            textColor=DARK,
+        ),
+    }
+
+
+def _rich_flowables(value: Any, style: ParagraphStyle) -> list[Paragraph]:
+    text = _pdf_plain(value)
+    if not text:
+        return []
+    paragraphs = [part.strip() for part in re.split(r"\n+", text) if part.strip()]
+    return [Paragraph(xml_escape(part, quote=False), style) for part in paragraphs]
+
+
+def _append_rich(story: list, value: Any, style: ParagraphStyle) -> None:
+    story.extend(_rich_flowables(value, style))
+
+
+def _append_bullets(story: list, values: Any, style: ParagraphStyle) -> None:
+    if not isinstance(values, list):
+        return
+    for value in values:
+        text = _pdf_plain(value)
+        if text:
+            story.append(Paragraph(f"- {xml_escape(text, quote=False)}", style))
+
+
+def _effective_price(record: dict, fallback: dict | None = None) -> str:
+    fallback = fallback or {}
+    promotion = bool(record.get("promotion_active"))
+    price = record.get("promotion_price") if promotion else record.get("price")
+    currency = record.get("promotion_currency") if promotion else record.get("currency")
+    additional = (
+        record.get("promotion_additional_price")
+        if promotion and record.get("promotion_additional_price") not in (None, "")
+        else record.get("additional_price")
+    )
+    additional_currency = (
+        record.get("promotion_additional_currency")
+        if promotion and record.get("promotion_additional_price") not in (None, "")
+        else record.get("additional_currency")
+    )
+    if price in (None, ""):
+        price = record.get("price_from")
+        if price in (None, ""):
+            price = fallback.get("price_from")
+        currency = currency or fallback.get("currency")
+    if additional in (None, ""):
+        additional = fallback.get("additional_price")
+        additional_currency = additional_currency or fallback.get("additional_currency")
+
+    parts: list[str] = []
+    if price not in (None, ""):
+        prefix = "от " if record.get("price_type", fallback.get("price_type")) == "from" else ""
+        parts.append(f"{prefix}{price} {_format_currency(currency or fallback.get('currency'))}")
+    if additional not in (None, ""):
+        parts.append(
+            f"{additional} {_format_currency(additional_currency or fallback.get('additional_currency'))}"
+        )
+    return " + ".join(parts) or "уточняйте у менеджера"
+
+
+def _date_rows(tour: dict) -> list[list[str]]:
+    dated: list[tuple[date, list[str]]] = []
+    sources: list[tuple[str, dict]] = []
+    sources.extend(("", item) for item in tour.get("dates") or [] if isinstance(item, dict))
+    for chain in tour.get("chains") or []:
+        if not isinstance(chain, dict) or chain.get("active") is False:
+            continue
+        chain_title = _pdf_plain(chain.get("title"))
+        sources.extend(
+            (chain_title, item)
+            for item in chain.get("dates") or []
+            if isinstance(item, dict)
+        )
+
+    today = date.today()
+    for option, item in sources:
+        if str(item.get("status") or "").lower() in {"hidden", "inactive", "cancelled"}:
+            continue
+        start = _parse_pdf_date(item.get("start") or item.get("date_start") or item.get("date"))
+        end = _parse_pdf_date(item.get("end"))
+        if not (start or end) or (start or end) < today:
+            continue
+        dated.append(
+            (
+                start or end,
+                [
+                    _date_range(item),
+                    option or _pdf_plain(item.get("comment")),
+                    _effective_price(item, tour),
+                ],
+            )
+        )
+    dated.sort(key=lambda item: item[0])
+    return [row for _sort_date, row in dated]
+
+
+def _styled_table(
+    rows: list[list[Any]],
+    widths: list[float],
+    styles: dict[str, ParagraphStyle],
+    header: bool = True,
+) -> Table:
+    converted: list[list[Paragraph]] = []
+    for row_index, row in enumerate(rows):
+        style = styles["small_bold"] if header and row_index == 0 else styles["small"]
+        converted.append([Paragraph(_pdf_markup(cell), style) for cell in row])
+    table = Table(converted, colWidths=widths, repeatRows=1 if header else 0, hAlign="LEFT")
+    commands = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("GRID", (0, 0), (-1, -1), 0.35, LINE),
+        ("ROWBACKGROUNDS", (0, 1 if header else 0), (-1, -1), [colors.white, colors.HexColor("#FAFAF9")]),
+    ]
+    if header:
+        commands.extend(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), SOFT_ORANGE),
+                ("TEXTCOLOR", (0, 0), (-1, 0), ORANGE_DARK),
+            ]
+        )
+    table.setStyle(TableStyle(commands))
+    return table
+
+
+def _room_price_text(item: dict) -> str:
+    prices = [_effective_price(item)]
+    meal_prices = item.get("meal_prices") if isinstance(item.get("meal_prices"), dict) else {}
+    for key, label in MEAL_LABELS.items():
+        price = meal_prices.get(key)
+        if not isinstance(price, dict):
+            continue
+        selected = price.get("promotion_price") or price.get("price")
+        if selected in (None, ""):
+            continue
+        currency = (
+            price.get("promotion_currency")
+            if price.get("promotion_price") not in (None, "")
+            else price.get("currency")
+        )
+        prices.append(f"{label}: {selected} {_format_currency(currency)}")
+    return "; ".join(dict.fromkeys(prices))
+
+
+def _stacked_date_label(item: dict) -> str:
+    """Format an accommodation period on two explicit, easy-to-read lines."""
+
+    label = _pdf_plain(item.get("date_label"))
+    dates = re.findall(r"\b\d{2}\.\d{2}\.\d{4}\b", label)
+    if len(dates) >= 2:
+        return f"с {dates[0]}\nпо {dates[1]}"
+    if label:
+        return label
+    return _format_date(item.get("date_start"))
+
+
+def _append_accommodation(
+    story: list,
+    tour: dict,
+    styles: dict[str, ParagraphStyle],
+    content_width: float,
+) -> None:
+    groups: list[tuple[str, str, list[dict]]] = []
+    direct_hotels = [
+        item for item in tour.get("hotels") or [] if isinstance(item, dict) and item.get("active") is not False
+    ]
+    if direct_hotels:
+        groups.append(("", "", direct_hotels))
+    for chain in tour.get("chains") or []:
+        if not isinstance(chain, dict) or chain.get("active") is False:
+            continue
+        hotels = [
+            item for item in chain.get("hotels") or [] if isinstance(item, dict) and item.get("active") is not False
+        ]
+        if hotels:
+            groups.append(
+                (
+                    _pdf_plain(chain.get("title")),
+                    _pdf_plain(chain.get("description")),
+                    hotels,
+                )
+            )
+    if not groups:
+        return
+
+    story.append(Paragraph("Варианты размещения", styles["section"]))
+    for group_title, group_description, hotels in groups:
+        if group_title:
+            story.append(Paragraph(xml_escape(group_title), styles["subsection"]))
+        _append_rich(story, group_description, styles["body"])
+        for hotel_index, hotel in enumerate(hotels, start=1):
+            hotel_name = _pdf_plain(hotel.get("name")) or _pdf_plain(hotel.get("anchor_slug"))
+            hotel_name = hotel_name or f"Вариант размещения {hotel_index}"
+            story.append(Paragraph(xml_escape(hotel_name), styles["subsection"]))
+            details = [
+                value
+                for value in (
+                    f"Расположение: {_pdf_plain(hotel.get('location'))}" if _pdf_plain(hotel.get("location")) else "",
+                    f"Питание: {_pdf_plain(hotel.get('meal'))}" if _pdf_plain(hotel.get("meal")) else "",
+                )
+                if value
+            ]
+            if details:
+                story.append(Paragraph(xml_escape("; ".join(details)), styles["body"]))
+            _append_rich(story, hotel.get("description"), styles["body"])
+
+            for room_index, room in enumerate(hotel.get("rooms") or [], start=1):
+                if not isinstance(room, dict) or room.get("active") is False:
+                    continue
+                room_title = _pdf_plain(room.get("title")) or f"Номер {room_index}"
+                story.append(Paragraph(xml_escape(room_title), styles["minor"]))
+                _append_rich(story, room.get("description"), styles["body"])
+                price_rows = []
+                for price in room.get("date_prices") or []:
+                    if not isinstance(price, dict):
+                        continue
+                    date_label = _stacked_date_label(price)
+                    if date_label:
+                        price_rows.append([date_label, _room_price_text(price)])
+                if price_rows:
+                    story.append(
+                        _styled_table(
+                            [["Дата", "Стоимость"]] + price_rows,
+                            [content_width * 0.34, content_width * 0.66],
+                            styles,
+                        )
+                    )
+                    story.append(Spacer(1, 3))
+
+
+def build_tour_program_pdf(
+    tour: dict,
+    settings: dict | None = None,
+    upload_dir: Path | None = None,
+    program_config: dict | None = None,
+) -> bytes:
+    """Build a compact multi-page PDF from every relevant tour text field."""
+
+    settings = settings or {}
+    program_config = program_config if isinstance(program_config, dict) else {}
+    styles = _pdf_styles()
+    buffer = io.BytesIO()
+    content_width = PAGE_W - MARGIN * 2
+    first_top = 168
+    footer_height = 28
+
+    default_company = _pdf_plain(
+        settings.get("company_short") or settings.get("company_name") or "TRAVELSPACE"
+    )
+    title = _pdf_plain(program_config.get("header_title") or tour.get("title")) or "Программа тура"
+    footer_values = [
+        _pdf_plain(program_config.get("footer_company") or default_company),
+        _pdf_plain(program_config.get("footer_site") or settings.get("site_url") or "travelspace.by"),
+        _pdf_plain(
+            program_config.get("footer_phone")
+            or settings.get("phone")
+            or settings.get("company_phone")
+            or "+375 29 636 99 11"
+        ),
+    ]
+    footer_text = " | ".join(value for value in footer_values if value)
+    image = _media_path(_as_text(tour.get("hero_image") or tour.get("seo_image")), upload_dir)
+
+    def draw_footer(c: canvas.Canvas, doc) -> None:
+        c.saveState()
+        c.setStrokeColor(LINE)
+        c.line(MARGIN, 25, PAGE_W - MARGIN, 25)
+        c.setFillColor(MUTED)
+        c.setFont(FONT_REGULAR, 7)
+        _fit_text(c, footer_text, MARGIN, 13, content_width - 45, FONT_REGULAR, 7, min_size=5.8)
+        c.setFont(FONT_REGULAR, 7)
+        c.drawRightString(PAGE_W - MARGIN, 13, f"Страница {doc.page}")
+        c.restoreState()
+
+    def draw_first_page(c: canvas.Canvas, doc) -> None:
+        _draw_cover_image(c, image, 0, PAGE_H - 150, PAGE_W, 150)
+        c.saveState()
+        c.setFillColor(colors.Color(0, 0, 0, alpha=0.42))
+        c.rect(0, PAGE_H - 150, PAGE_W, 150, stroke=0, fill=1)
+        c.setFillColor(colors.white)
+        c.setFont(FONT_BOLD, 13)
+        c.drawString(MARGIN, PAGE_H - 24, default_company)
+
+        title_size = 20.5
+        title_lines = _wrap_text(title, FONT_BOLD, title_size, content_width)
+        while len(title_lines) > 4 and title_size > 14:
+            title_size -= 1
+            title_lines = _wrap_text(title, FONT_BOLD, title_size, content_width)
+        title_y = PAGE_H - 65
+        c.setFont(FONT_BOLD, title_size)
+        for line in title_lines:
+            c.drawString(MARGIN, title_y, line)
+            title_y -= title_size * 1.14
+        c.restoreState()
+        draw_footer(c, doc)
+
+    def draw_later_page(c: canvas.Canvas, doc) -> None:
+        c.saveState()
+        c.setFillColor(ORANGE_DARK)
+        c.setFont(FONT_BOLD, 8.5)
+        c.drawString(MARGIN, PAGE_H - 22, default_company)
+        c.setFillColor(MUTED)
+        c.setFont(FONT_REGULAR, 7.5)
+        compact_title = _truncate_words(title, 95)
+        c.drawRightString(PAGE_W - MARGIN, PAGE_H - 22, compact_title)
+        c.setStrokeColor(LINE)
+        c.line(MARGIN, PAGE_H - 29, PAGE_W - MARGIN, PAGE_H - 29)
+        c.restoreState()
+        draw_footer(c, doc)
+
+    document = BaseDocTemplate(
+        buffer,
+        pagesize=A4,
+        title=title,
+        author=default_company,
+        leftMargin=MARGIN,
+        rightMargin=MARGIN,
+        topMargin=36,
+        bottomMargin=footer_height,
+    )
+    first_frame = Frame(
+        MARGIN,
+        footer_height,
+        content_width,
+        PAGE_H - first_top - footer_height,
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+        id="first-page-content",
+    )
+    later_frame = Frame(
+        MARGIN,
+        footer_height,
+        content_width,
+        PAGE_H - 66 - footer_height,
+        leftPadding=0,
+        rightPadding=0,
+        topPadding=0,
+        bottomPadding=0,
+        id="later-page-content",
+    )
+    document.addPageTemplates(
+        [
+            PageTemplate(
+                id="First",
+                frames=[first_frame],
+                onPage=draw_first_page,
+                autoNextPageTemplate="Later",
+            ),
+            PageTemplate(id="Later", frames=[later_frame], onPage=draw_later_page),
+        ]
+    )
+
+    story: list = []
+    intro = program_config.get("intro") or tour.get("tagline") or tour.get("short_description")
+    _append_rich(story, intro, styles["intro"])
+    description = tour.get("description")
+    if _pdf_plain(description) and _pdf_plain(description) != _pdf_plain(intro):
+        story.append(Paragraph("О туре", styles["section"]))
+        _append_rich(story, description, styles["body"])
+
+    facts = [
+        ["Длительность", "Выезд", "Направление", "Стоимость"],
+        [
+            _pdf_plain(tour.get("duration")) or "уточняйте",
+            _departure_cities(tour),
+            _pdf_plain(tour.get("region_name")) or "уточняйте",
+            _effective_price(tour),
+        ],
+    ]
+    story.append(Spacer(1, 3))
+    story.append(_styled_table(facts, [content_width / 4] * 4, styles))
+    story.append(Spacer(1, 3))
+
+    date_rows = _date_rows(tour)
+    if date_rows:
+        story.append(Paragraph("Даты и стоимость", styles["section"]))
+        has_named_options = any(_pdf_plain(row[1]) for row in date_rows)
+        if has_named_options:
+            table_rows = [["Даты", "Вариант", "Стоимость"]] + date_rows
+            table_widths = [
+                content_width * 0.25,
+                content_width * 0.45,
+                content_width * 0.30,
+            ]
+        else:
+            table_rows = [["Даты", "Стоимость"]] + [
+                [row[0], row[2]] for row in date_rows
+            ]
+            table_widths = [content_width * 0.38, content_width * 0.62]
+        story.append(
+            _styled_table(
+                table_rows,
+                table_widths,
+                styles,
+            )
+        )
+
+    for heading, key in (
+        ("Главные впечатления", "highlights"),
+        ("Что увидим", "what_to_see"),
+    ):
+        values = tour.get(key)
+        if isinstance(values, list) and any(_pdf_plain(item) for item in values):
+            story.append(Paragraph(heading, styles["section"]))
+            _append_bullets(story, values, styles["bullet"])
+
+    days = program_config.get("days") if isinstance(program_config.get("days"), list) else tour.get("program")
+    days = [day for day in (days or []) if isinstance(day, dict)]
+    if days:
+        story.append(Paragraph("Программа тура", styles["section"]))
+        for index, day in enumerate(days, start=1):
+            day_number = _pdf_plain(day.get("day")) or str(index)
+            day_title = _pdf_plain(day.get("title")) or f"День {day_number}"
+            story.append(
+                Paragraph(
+                    f"День {xml_escape(day_number)}. {xml_escape(day_title)}",
+                    styles["subsection"],
+                )
+            )
+            _append_rich(
+                story,
+                day.get("description") or day.get("notes"),
+                styles["body"],
+            )
+            notes = day.get("notes")
+            if _pdf_plain(notes) and _pdf_plain(notes) != _pdf_plain(day.get("description")):
+                story.append(
+                    Paragraph(
+                        f"Важно: {xml_escape(_pdf_plain(notes), quote=False)}",
+                        styles["body"],
+                    )
+                )
+            if index < len(days):
+                story.append(
+                    HRFlowable(
+                        width="100%",
+                        thickness=0.45,
+                        color=LINE,
+                        spaceBefore=1,
+                        spaceAfter=3,
+                    )
+                )
+
+    source_lists = {
+        "included": program_config.get("included", tour.get("included")),
+        "excluded": program_config.get("excluded", tour.get("excluded")),
+        "important_info": program_config.get("important_info", tour.get("important_info")),
+    }
+    for heading, key in (
+        ("В стоимость включено", "included"),
+        ("Оплачивается отдельно", "excluded"),
+        ("Важная информация", "important_info"),
+    ):
+        values = source_lists[key]
+        if isinstance(values, list) and any(_pdf_plain(item) for item in values):
+            story.append(Paragraph(heading, styles["section"]))
+            _append_bullets(story, values, styles["bullet"])
+
+    _append_accommodation(story, tour, styles, content_width)
+
+    faq = [item for item in tour.get("faq") or [] if isinstance(item, dict)]
+    if faq:
+        story.append(Paragraph("Частые вопросы", styles["section"]))
+        for item in faq:
+            question = _pdf_plain(item.get("question"))
+            answer = item.get("answer")
+            if question:
+                story.append(Paragraph(xml_escape(question), styles["subsection"]))
+            _append_rich(story, answer, styles["body"])
+
+    if not story:
+        story.append(Paragraph("Подробная программа уточняется у менеджера.", styles["body"]))
+
+    document.build(story)
     return buffer.getvalue()

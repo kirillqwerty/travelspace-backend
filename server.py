@@ -81,6 +81,8 @@ from seo_runtime import (
     canonical_url_for_path,
     get_http_status_for_path,
     get_redirect_target,
+    is_listed_article,
+    is_listed_tour,
     is_public_tour,
     render_index_html,
     settings_with_seo_hub_defaults,
@@ -109,6 +111,39 @@ logger = logging.getLogger("travelspace")
 
 app = FastAPI(title="Tour Operator API")
 api = APIRouter(prefix="/api")
+
+
+class HeadAsGetMiddleware:
+    """Serve HEAD through the matching GET route and omit only the body."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "HEAD":
+            await self.app(scope, receive, send)
+            return
+
+        get_scope = dict(scope)
+        get_scope["method"] = "GET"
+        body_finished = False
+
+        async def send_head(message):
+            nonlocal body_finished
+            if message.get("type") != "http.response.body":
+                await send(message)
+                return
+            if not message.get("more_body", False) and not body_finished:
+                body_finished = True
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"",
+                        "more_body": False,
+                    }
+                )
+
+        await self.app(get_scope, receive, send_head)
 
 
 # All tour-date retention rules use Belarus local time (UTC+3).
@@ -141,6 +176,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(HeadAsGetMiddleware)
 
 
 def _cookie_secure() -> bool:
@@ -735,7 +771,7 @@ def _default_tour_pdf_program(
     tour: dict,
     settings: dict | None = None,
 ) -> dict:
-    """Build a compact editable draft from the full tour program."""
+    """Build the downloadable program directly from the current tour data."""
     settings = settings or {}
     days = []
 
@@ -798,29 +834,6 @@ def _default_tour_pdf_program(
     }
 
 
-def _pdf_description_limit(days_count: int) -> int:
-    if days_count <= 3:
-        return 300
-    if days_count <= 5:
-        return 260
-    if days_count <= 7:
-        return 220
-    if days_count <= 10:
-        return 180
-    if days_count <= 14:
-        return 120
-    return 80
-
-
-def _limit_pdf_text(value: Any, limit: int) -> str:
-    text = _as_text(value)
-    if len(text) <= limit:
-        return text
-
-    cut = text[:limit].rsplit(" ", 1)[0].strip().rstrip(" ,;:-")
-    return cut or text[:limit].strip()
-
-
 def _normalize_tour_pdf_program(
     payload: dict,
     tour: dict,
@@ -837,7 +850,6 @@ def _normalize_tour_pdf_program(
             or _as_text(day.get("description") or day.get("text"))
         )
     ]
-    description_limit = _pdf_description_limit(len(raw_days))
     days = []
 
     for index, day in enumerate(raw_days, start=1):
@@ -845,10 +857,7 @@ def _normalize_tour_pdf_program(
             continue
 
         title = _as_text(day.get("title"))
-        description = _limit_pdf_text(
-            day.get("description") or day.get("text"),
-            description_limit,
-        )
+        description = _as_text(day.get("description") or day.get("text"))
         day_number = _as_text(day.get("day")) or str(index)
 
         if not title and not description:
@@ -871,23 +880,23 @@ def _normalize_tour_pdf_program(
 
         return [_as_text(item) for item in value if _as_text(item)]
 
-    def _editable_text(key: str, limit: int) -> str:
+    def _editable_text(key: str) -> str:
         if key not in payload:
             return fallback[key]
-        return _limit_pdf_text(payload.get(key), limit)
+        return _as_text(payload.get(key))
 
     return {
-        "header_company": _editable_text("header_company", 80),
-        "header_title": _editable_text("header_title", 160),
+        "header_company": _editable_text("header_company"),
+        "header_title": _editable_text("header_title"),
         "intro": _as_text(payload.get("intro")),
         "days": days,
         "included": _strings("included"),
         "excluded": _strings("excluded"),
         "important_info": _strings("important_info"),
         "show_info_blocks": payload.get("show_info_blocks") is not False,
-        "footer_company": _editable_text("footer_company", 80),
-        "footer_site": _editable_text("footer_site", 120),
-        "footer_phone": _editable_text("footer_phone", 80),
+        "footer_company": _editable_text("footer_company"),
+        "footer_site": _editable_text("footer_site"),
+        "footer_phone": _editable_text("footer_phone"),
         "source": "admin",
     }
 
@@ -966,7 +975,7 @@ async def get_settings():
 async def get_tours(region: str | None = None, badge: str | None = None):
     # Public reads also clean stale departure dates from JSON storage.
     # A past date inside a chain is deleted, but the tour itself remains.
-    items = [t for t in _prune_all_tour_departure_dates() if is_public_tour(t)]
+    items = [t for t in _prune_all_tour_departure_dates() if is_listed_tour(t)]
 
     if region:
         items = [t for t in items if t.get("region_slug") == region]
@@ -999,10 +1008,7 @@ async def download_tour_program(slug: str):
 
     try:
         settings = load("settings", default={})
-        program_config = (
-            _saved_tour_pdf_program(tour.get("id"), tour, settings)
-            or _default_tour_pdf_program(tour, settings)
-        )
+        program_config = _default_tour_pdf_program(tour, settings)
         pdf = build_tour_program_pdf(
             tour,
             settings=settings,
@@ -1022,7 +1028,8 @@ async def download_tour_program(slug: str):
             "Content-Disposition": (
                 f"attachment; filename=\"{filename}\"; "
                 f"filename*=UTF-8''{quote(filename)}"
-            )
+            ),
+            "Cache-Control": "no-store",
         },
     )
 
@@ -1036,7 +1043,7 @@ async def get_reviews():
 
 @api.get("/articles")
 async def get_articles():
-    items = [a for a in list_items("articles") if a.get("active", True)]
+    items = [a for a in list_items("articles") if is_listed_article(a)]
     items.sort(key=lambda x: x.get("published_at", ""), reverse=True)
     return items
 
@@ -1241,15 +1248,22 @@ async def admin_get_tour_pdf_program(
 
     settings = load("settings", default={})
     generated_program = _default_tour_pdf_program(tour, settings)
-    saved_program = _saved_tour_pdf_program(item_id, tour, settings)
 
     return {
         "tour_id": tour.get("id"),
         "title": tour.get("title"),
         "slug": tour.get("slug"),
-        "pdf_program": saved_program or generated_program,
+        "pdf_program": generated_program,
         "source_program": generated_program,
-        "is_generated": saved_program is None,
+        "is_generated": True,
+        "automatic": True,
+        "summary": {
+            "days": len(generated_program.get("days") or []),
+            "included": len(generated_program.get("included") or []),
+            "excluded": len(generated_program.get("excluded") or []),
+            "important_info": len(generated_program.get("important_info") or []),
+            "faq": len(tour.get("faq") or []),
+        },
     }
 
 
@@ -1268,38 +1282,14 @@ async def admin_update_tour_pdf_program(
         raise HTTPException(status_code=404, detail="Тур не найден")
 
     settings = load("settings", default={})
-    pdf_program = _normalize_tour_pdf_program(payload, tour, settings)
-    existing = _tour_pdf_program_record(item_id)
-    now = _now()
-
-    if existing:
-        updated = update_item(
-            TOUR_PDF_PROGRAMS_COLLECTION,
-            existing.get("id"),
-            {
-                **pdf_program,
-                "tour_id": item_id,
-                "updated_at": now,
-            },
-        )
-    else:
-        updated = add_item(
-            TOUR_PDF_PROGRAMS_COLLECTION,
-            {
-                "id": str(uuid.uuid4()),
-                "tour_id": item_id,
-                **pdf_program,
-                "created_at": now,
-                "updated_at": now,
-            },
-        )
+    pdf_program = _default_tour_pdf_program(tour, settings)
 
     return {
         "ok": True,
-        "pdf_program": (
-            _saved_tour_pdf_program(item_id, tour, settings) or pdf_program
-        ),
-        "record_id": updated.get("id") if updated else None,
+        "automatic": True,
+        "message": "PDF формируется автоматически из карточки тура.",
+        "pdf_program": pdf_program,
+        "record_id": None,
     }
 
 
