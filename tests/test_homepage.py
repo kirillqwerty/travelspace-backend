@@ -57,3 +57,13 @@ def test_home_faq_projection_changes_only_for_visible_content():
 
     assert home_faq_content(visible) == ("Вопрос", "Ответ", 1)
     assert home_faq_content(hidden) is None
+
+
+def test_hero_texts_keep_legacy_defaults_and_can_be_edited_or_hidden():
+    legacy = home_page_content({"home_page": {"h1": "Автобусные туры"}})
+    assert legacy["hero_tagline"] == DEFAULT_HOME_PAGE["hero_tagline"]
+    edited = {"home_page": {"hero_tagline": "Новый подзаголовок", "hero_description": "**Новый** текст"}}
+    assert home_page_content(edited)["hero_description"] == "**Новый** текст"
+    assert homepage_settings_changed({}, edited)
+    hidden = home_page_content({"home_page": {"hero_tagline": "", "hero_description": " "}})
+    assert hidden["hero_tagline"] == hidden["hero_description"] == ""

@@ -427,6 +427,17 @@ def test_rich_text_links_open_a_new_tab_safely():
     assert unsafe == "Первый Второй"
 
 
+def test_hero_edits_and_bold_content_are_present_in_server_html(monkeypatch):
+    configure_storage(monkeypatch)
+    monkeypatch.setitem(SETTINGS, "home_page", {"hero_tagline": "Новый слоган", "hero_description": "Поездки **без хлопот**"})
+    html = seo_runtime._render_snapshot("/", seo_runtime.get_seo_for_path("/"))
+    assert "Новый слоган" in html
+    assert "<strong>без хлопот</strong>" in html
+    assert "Туры, в которые хочется возвращаться" not in html
+    assert "<strong>Проезд</strong>" in seo_runtime._render_list(["**Проезд** и проживание"])
+    assert "<strong>Текст</strong>" in seo_runtime._render_paragraphs("**Текст** статьи")
+
+
 def test_canonical_and_robots_overrides_are_safe(monkeypatch):
     configure_storage(monkeypatch)
 

@@ -54,10 +54,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr
 
 from auth import (
+    ADMIN_COOKIE_MAX_AGE,
     ADMIN_SESSION_COOKIE,
     authenticate,
     clear_login_failures,
     create_access_token,
+    decode_token,
     get_current_admin,
     login_retry_after,
     record_login_failure,
@@ -1168,7 +1170,20 @@ async def login(payload: LoginIn, request: Request, response: Response):
 
 
 @api.get("/auth/me")
-async def me(current=Depends(get_current_admin)):
+async def me(request: Request, response: Response, current=Depends(get_current_admin)):
+    token = request.cookies.get(ADMIN_SESSION_COOKIE)
+    payload = decode_token(token)
+    if payload.get("persistent") is True and "exp" not in payload:
+        response.set_cookie(
+            key=ADMIN_SESSION_COOKIE,
+            value=token,
+            max_age=ADMIN_COOKIE_MAX_AGE,
+            expires=ADMIN_COOKIE_MAX_AGE,
+            path="/api",
+            secure=_cookie_secure(),
+            httponly=True,
+            samesite="strict",
+        )
     return current
 
 

@@ -1,6 +1,6 @@
 """Authentication helpers for the single Travelspace administrator.
 
-The browser session is stored in a short-lived HttpOnly cookie. Mutating
+The browser session is stored in a persistent HttpOnly cookie. Mutating
 requests additionally require a CSRF token which is bound to that session.
 """
 
@@ -29,6 +29,9 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 DEFAULT_ACCESS_TOKEN_MINUTES = 480
 MAX_ACCESS_TOKEN_MINUTES = 1_440
+# Browsers retain cookies for a finite period; /auth/me renews this lifetime.
+# The signed persistent session itself does not expire and remains revocable.
+ADMIN_COOKIE_MAX_AGE = 365 * 24 * 60 * 60
 LOGIN_WINDOW_SECONDS = 15 * 60
 LOGIN_MAX_FAILURES = 5
 
@@ -90,12 +93,17 @@ def access_token_minutes() -> int:
     return minutes
 
 
+def persistent_admin_sessions() -> bool:
+    return os.environ.get("ADMIN_SESSION_PERSISTENT", "true").strip().lower() == "true"
+
+
 def validate_auth_configuration() -> None:
     """Fail startup when authentication still uses weak/default settings."""
     _admin_email()
     _admin_password()
     _secret()
-    access_token_minutes()
+    if not persistent_admin_sessions():
+        access_token_minutes()
 
 
 def hash_password(password: str) -> str:
@@ -128,7 +136,8 @@ def _public_user(user: dict, csrf_token: str | None = None) -> dict:
 def create_access_token(user: dict) -> tuple[str, str, int]:
     now = datetime.now(timezone.utc)
     csrf_token = secrets.token_urlsafe(32)
-    lifetime_seconds = access_token_minutes() * 60
+    persistent = persistent_admin_sessions()
+    lifetime_seconds = ADMIN_COOKIE_MAX_AGE if persistent else access_token_minutes() * 60
     payload = {
         "sub": user["email"],
         "email": user["email"],
@@ -139,16 +148,19 @@ def create_access_token(user: dict) -> tuple[str, str, int]:
         "jti": secrets.token_urlsafe(24),
         "iat": now,
         "nbf": now,
-        "exp": now + timedelta(seconds=lifetime_seconds),
         "iss": JWT_ISSUER,
         "aud": JWT_AUDIENCE,
     }
+    if persistent:
+        payload["persistent"] = True
+    else:
+        payload["exp"] = now + timedelta(seconds=lifetime_seconds)
     token = jwt.encode(payload, _secret(), algorithm=JWT_ALGORITHM)
     return token, csrf_token, lifetime_seconds
 
 
 def decode_token(token: str) -> dict:
-    return jwt.decode(
+    payload = jwt.decode(
         token,
         _secret(),
         algorithms=[JWT_ALGORITHM],
@@ -165,12 +177,18 @@ def decode_token(token: str) -> dict:
                 "jti",
                 "iat",
                 "nbf",
-                "exp",
                 "iss",
                 "aud",
             ]
         },
     )
+    # Only explicitly issued persistent tokens may omit expiration. Legacy
+    # timed tokens retain their original expiration and validation rules.
+    if "exp" not in payload and payload.get("persistent") is not True:
+        raise jwt.MissingRequiredClaimError("exp")
+    if payload.get("persistent") is True and not persistent_admin_sessions():
+        raise jwt.InvalidTokenError("Persistent sessions have been disabled")
+    return payload
 
 
 def seed_admin() -> None:

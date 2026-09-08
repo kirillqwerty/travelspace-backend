@@ -303,6 +303,10 @@ def _limit(value: Any, max_len: int) -> str:
     return text[: max_len - 1].rstrip(" ,.;:-") + "…"
 
 
+def _first_text(*values: Any) -> str:
+    return next((_strip_rich_text(value) for value in values if _strip_rich_text(value)), "")
+
+
 def _absolute_url(value: str | None) -> str:
     value = str(value or DEFAULT_IMAGE).strip()
     if value.startswith(("http://", "https://")):
@@ -693,10 +697,11 @@ def _landing_seo(path: str) -> dict[str, Any]:
 
 
 def _not_found(kind: str = "Страница") -> dict[str, Any]:
+    heading = f"{kind} не найден" if kind == "Тур" else f"{kind} не найдена"
     return {
-        "title": f"{kind} не найдена | TRAVELSPACE",
-        "description": f"{kind} не найдена. Перейдите в каталог актуальных туров TRAVELSPACE.",
-        "heading": f"{kind} не найдена",
+        "title": f"{heading} | TRAVELSPACE",
+        "description": f"{heading}. Перейдите в каталог актуальных туров TRAVELSPACE.",
+        "heading": heading,
         "image": DEFAULT_IMAGE,
         "no_index": True,
         "type": "website",
@@ -707,12 +712,9 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
     tour = get_by("tours", "slug", slug)
     if not is_public_tour(tour):
         return _not_found("Тур")
-    description = (
-        tour.get("seo_description")
-        or tour.get("short_description")
-        or tour.get("tagline")
-        or tour.get("description")
-        or f"{tour.get('title', 'Тур')}: программа, даты и стоимость поездки."
+    description = _first_text(
+        tour.get("seo_description"), tour.get("short_description"), tour.get("tagline"),
+        tour.get("description"), f"{tour.get('title', 'Тур')}: программа, даты и стоимость поездки."
     )
     canonical_url = _record_canonical(tour, path)
     structured = {
@@ -725,7 +727,7 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
         "provider": {"@id": f"{PUBLIC_SITE_URL}/#organization"},
     }
     return {
-        "title": tour.get("seo_title") or f"{tour.get('title', 'Тур')} | TRAVELSPACE",
+        "title": _first_text(tour.get("seo_title"), f"{tour.get('title', 'Тур')} | TRAVELSPACE"),
         "description": description,
         "heading": tour.get("title"),
         "image": _tour_image(tour),
@@ -742,7 +744,7 @@ def _article_seo(slug: str, path: str) -> dict[str, Any]:
     article = get_by("articles", "slug", slug)
     if not is_public_article(article):
         return _not_found("Статья")
-    description = article.get("seo_description") or article.get("excerpt") or article.get("content")
+    description = _first_text(article.get("seo_description"), article.get("excerpt"), article.get("content"), DEFAULT_DESCRIPTION)
     canonical_url = _record_canonical(article, path)
     structured: dict[str, Any] = {
         "@type": "Article",
@@ -758,7 +760,7 @@ def _article_seo(slug: str, path: str) -> dict[str, Any]:
     if article.get("seo_lastmod") or article.get("updated_at"):
         structured["dateModified"] = article.get("seo_lastmod") or article["updated_at"]
     return {
-        "title": article.get("seo_title") or f"{article.get('title', 'Статья')} | TRAVELSPACE",
+        "title": _first_text(article.get("seo_title"), f"{article.get('title', 'Статья')} | TRAVELSPACE"),
         "description": description,
         "heading": article.get("seo_h1") or article.get("title"),
         "image": article.get("seo_image") or article.get("cover") or DEFAULT_IMAGE,
@@ -896,8 +898,8 @@ def _structured_graph(path: str, seo: dict[str, Any]) -> dict[str, Any]:
 
 
 def _render_meta_block(path: str, seo: dict[str, Any]) -> str:
-    title = _limit(seo.get("title") or DEFAULT_TITLE, 80)
-    description = _limit(seo.get("description") or DEFAULT_DESCRIPTION, 180)
+    title = _limit(_first_text(seo.get("title"), DEFAULT_TITLE), 80)
+    description = _limit(_first_text(seo.get("description"), DEFAULT_DESCRIPTION), 180)
     image = _absolute_url(seo.get("image"))
     url = seo.get("canonical_url") or _page_url(path)
     robots = ", ".join(
@@ -925,25 +927,25 @@ def _render_meta_block(path: str, seo: dict[str, Any]) -> str:
         f'<meta{attr} name="twitter:title" content="{escape(title, quote=True)}" />',
         f'<meta{attr} name="twitter:description" content="{escape(description, quote=True)}" />',
         f'<meta{attr} name="twitter:image" content="{escape(image, quote=True)}" />',
-        f'<script{attr} type="application/ld+json">{json.dumps(_structured_graph(path, seo), ensure_ascii=False, separators=(",", ":"))}</script>',
+        f'<script{attr} type="application/ld+json">{_script_json(_structured_graph(path, seo))}</script>',
     ]
     return "\n    " + "\n    ".join(lines) + "\n"
 
 
-def _flatten_text(value: Any) -> list[str]:
+def _flatten_text(value: Any, preserve_rich: bool = False) -> list[str]:
     if isinstance(value, str):
-        clean = _strip_html(value)
+        clean = re.sub(r"<[^>]+>", " ", value).strip() if preserve_rich else _strip_html(value)
         return [clean] if clean else []
     if isinstance(value, list):
         result: list[str] = []
         for item in value:
-            result.extend(_flatten_text(item))
+            result.extend(_flatten_text(item, preserve_rich))
         return result
     if isinstance(value, dict):
         result = []
         for key, item in value.items():
             if key not in {"id", "image", "icon", "map_embed", "slug"}:
-                result.extend(_flatten_text(item))
+                result.extend(_flatten_text(item, preserve_rich))
         return result
     return []
 
@@ -1008,18 +1010,21 @@ def _render_paragraphs(value: Any, limit: int | None = 8, semantic_headings: boo
     if isinstance(value, str):
         chunks = [part.strip() for part in re.split(r"\n\s*\n|\r?\n", value) if part.strip()]
     else:
-        chunks = _flatten_text(value)
+        chunks = _flatten_text(value, preserve_rich=True)
     rendered: list[str] = []
     selected_chunks = chunks if limit is None else chunks[:limit]
     for chunk in selected_chunks:
-        clean = _strip_html(chunk)
+        clean = re.sub(r"<[^>]+>", "", str(chunk)).strip()
+        if semantic_headings and clean.startswith("## "):
+            rendered.append(f"<h2>{_render_rich_inline(clean[3:])}</h2>")
+            continue
         semantic = re.match(r"^(\d+)\.\s+(.+?[.!?])(?:\s+(.+))?$", clean) if semantic_headings else None
         if semantic:
-            rendered.append(f"<h2>{escape(semantic.group(1) + '. ' + semantic.group(2))}</h2>")
+            rendered.append(f"<h2>{_render_rich_inline(semantic.group(1) + '. ' + semantic.group(2))}</h2>")
             if semantic.group(3):
-                rendered.append(f"<p>{escape(semantic.group(3))}</p>")
+                rendered.append(f"<p>{_render_rich_inline(semantic.group(3))}</p>")
         else:
-            rendered.append(f"<p>{escape(clean)}</p>")
+            rendered.append(f"<p>{_render_rich_inline(clean)}</p>")
     return "".join(rendered)
 
 
@@ -1041,8 +1046,8 @@ def _home_faq_items() -> list[dict[str, Any]]:
 
 
 def _render_list(value: Any) -> str:
-    items = _flatten_text(value)
-    return "<ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>" if items else ""
+    items = _flatten_text(value, preserve_rich=True)
+    return "<ul>" + "".join(f"<li>{_render_rich_inline(item)}</li>" for item in items) + "</ul>" if items else ""
 
 
 def _render_tour_gallery(tour: dict[str, Any]) -> str:
@@ -1221,12 +1226,12 @@ def _render_homepage_sections() -> str:
             if not isinstance(item, dict):
                 continue
             title = _strip_html(item.get("title"))
-            description = _strip_html(item.get("desc"))
+            description = _render_rich_inline(item.get("desc"))
             if title or description:
                 parts.append(
                     "<li>"
                     + (f"<h3>{escape(title)}</h3>" if title else "")
-                    + (f"<p>{escape(description)}</p>" if description else "")
+                    + (f"<p>{description}</p>" if description else "")
                     + "</li>"
                 )
         parts.append("</ul>")
@@ -1490,7 +1495,9 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         f"<p>{escape(_limit(seo.get('description'), 360))}</p>",
     ]
     if path == "/":
-        parts.append("<p>Туры, в которые хочется возвращаться</p>")
+        home = home_page_content(_settings())
+        parts.append(_render_rich_paragraphs(home["hero_tagline"]))
+        parts.append(_render_rich_paragraphs(home["hero_description"]))
         parts.append(_render_homepage_sections())
     elif path == "/tours":
         parts.append("<h2>Актуальные туры</h2>")
@@ -1562,6 +1569,83 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
     return "".join(parts)
 
 
+PUBLIC_RECORD_FIELDS = set("""
+id slug title title_highlighted transport_type active hidden hide_from_catalog order
+tagline short_description description region_name region_slug direction_name duration
+departure_city departure_cities departureCities price price_from currency additional_price
+additional_currency price_type badges hero_image hero_image_alt hero_mobile hero_mobile_image
+mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
+dates chains hotels use_hotel_chains program highlights what_to_see included excluded
+important_info faq map_embed content excerpt related_tour_slugs seo_title seo_description
+seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
+name text rating date photo question answer show_on_home category valid_until related_tour_slug
+button_text button_url discount value subtitle tour_name
+""".split())
+PUBLIC_SETTINGS_FIELDS = set("""
+company_short company_name address email phone phone_link site_url work_hours header_phones
+contact_phones social_buttons call_directions map_embed_url map_iframe_url map_route_url map_url
+home_page home_benefits seo_pages seo_hubs seo_default_image
+""".split())
+CARD_FIELDS = set("""
+id slug title title_highlighted transport_type active hidden hide_from_catalog order tagline
+short_description region_name region_slug direction_name duration departure_city departure_cities departureCities
+price price_from currency additional_price additional_currency price_type badges hero_image
+hero_image_alt hero_mobile hero_mobile_image mobile_hero_image gallery seo_image dates chains
+""".split())
+
+
+def _public_record(record: dict | None, fields: set[str] = PUBLIC_RECORD_FIELDS) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+    return {key: value for key, value in record.items() if key in fields}
+
+
+def _script_json(value: Any) -> str:
+    # A literal </script> inside admin-authored content must not end this element.
+    return (json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
+def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
+    settings = _settings()
+    tours = []
+    for tour in list_items("tours"):
+        if not is_listed_tour(tour):
+            continue
+        card = _public_record(tour, CARD_FIELDS)
+        # Menus/cards need dates and prices, not every hotel's full description.
+        if isinstance(card.get("chains"), list):
+            card["chains"] = [_public_record(chain, {"id", "name", "active", "dates"})
+                              for chain in card["chains"] if isinstance(chain, dict)]
+        tours.append(card)
+    articles = []
+    for article in list_items("articles"):
+        if not is_listed_article(article):
+            continue
+        summary = _public_record(article, {"id", "slug", "title", "excerpt", "cover", "images", "seo_image", "seo_description", "gallery", "published_at", "active", "hidden", "order"})
+        summary["excerpt"] = _limit(_first_text(article.get("excerpt"), article.get("content")), 190)
+        articles.append(summary)
+    status = get_http_status_for_path(path)
+    return {
+        "version": 1, "path": path, "status": status,
+        "record": _public_record(seo.get("record")) if status == 200 else None,
+        "seo": {
+            "title": _limit(_first_text(seo.get("title"), DEFAULT_TITLE), 80),
+            "description": _limit(_first_text(seo.get("description"), DEFAULT_DESCRIPTION), 180),
+            "canonical": seo.get("canonical_url") or _page_url(path),
+            "image": _absolute_url(seo.get("image")),
+            "noIndex": bool(seo.get("no_index")), "noFollow": bool(seo.get("no_follow")),
+            "type": seo.get("type") or "website", "siteName": SITE_NAME,
+            "graph": _structured_graph(path, seo),
+        },
+        "site": {"settings": {key: value for key, value in settings.items() if key in PUBLIC_SETTINGS_FIELDS},
+                 "tours": tours, "articles": articles, "ready": True},
+        "collections": {name: [_public_record(item) for item in list_items(name) if item.get("active") is not False]
+                        for name in ("reviews", "promotions", "faq")},
+    }
+
+
 def render_index_html(path: str) -> str:
     if not INDEX_HTML_PATH.exists():
         return ""
@@ -1570,15 +1654,29 @@ def render_index_html(path: str) -> str:
     for pattern in SEO_TAG_PATTERNS:
         html = re.sub(pattern, "", html, flags=re.IGNORECASE | re.DOTALL)
     seo = get_seo_for_path(clean_path)
-    html = re.sub(r"<head>", "<head>" + _render_meta_block(clean_path, seo), html, count=1, flags=re.IGNORECASE)
+    html = re.sub(r"<head>", lambda _: "<head>" + _render_meta_block(clean_path, seo), html, count=1, flags=re.IGNORECASE)
     snapshot = _render_snapshot(clean_path, seo)
     html = re.sub(
         r'<div\s+id=["\']root["\']\s*>\s*</div>',
-        f'<div id="root">{snapshot}</div>',
+        lambda _: f'<div id="root">{snapshot}</div>',
         html,
         count=1,
         flags=re.IGNORECASE,
     )
+    if not clean_path.startswith(("/admin", "/api")):
+        bootstrap = _script_json(_page_bootstrap(clean_path, seo))
+        html = html.replace("</body>", f'<script id="page-bootstrap" type="application/json">{bootstrap}</script></body>')
+        html = re.sub(r'<div\s+id="initial-load-cover"[^>]*>\s*</div>', "", html)
+        html = re.sub(r'<noscript>\s*You need to enable JavaScript to run this app\.\s*</noscript>', "", html)
+        fallback_css = ('<style id="server-page-style">[data-seo-prerender]{color:#171717;line-height:1.65;overflow-wrap:anywhere}'
+                        '[data-seo-prerender] h1{font-size:clamp(26px,4vw,44px);font-weight:800;margin:24px 0 16px}'
+                        '[data-seo-prerender] h2{font-size:24px;font-weight:700;margin:24px 0 12px}'
+                        '[data-seo-prerender] h3{font-size:19px;font-weight:700;margin:16px 0 8px}'
+                        '[data-seo-prerender] p{margin:10px 0}[data-seo-prerender] a{color:#C2410C;text-decoration:underline}'
+                        '[data-seo-prerender] img{max-width:100%;height:auto}[data-seo-prerender] ul{padding-left:24px;list-style:disc}'
+                        '[data-seo-prerender] table{width:100%;border-collapse:collapse}[data-seo-prerender] td,'
+                        '[data-seo-prerender] th{border:1px solid #ddd;padding:8px;text-align:left}</style>')
+        html = html.replace("</head>", fallback_css + "</head>")
     return html
 
 

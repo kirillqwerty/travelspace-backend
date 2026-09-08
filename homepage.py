@@ -13,6 +13,8 @@ from typing import Any
 
 DEFAULT_HOME_PAGE: dict[str, Any] = {
     "h1": "Автобусные туры из Минска",
+    "hero_tagline": "Туры, в которые хочется возвращаться",
+    "hero_description": "Путешествия автобусом и самолётом. Простые программы, заботливые гиды и понятная цена без сюрпризов в дороге.",
     "intro_title": "Автобусные туры из Минска и Беларуси",
     "intro_text": (
         "TRAVELSPACE организует автобусные туры из Минска и других городов "
@@ -114,6 +116,11 @@ def home_page_content(settings: Any) -> dict[str, Any]:
         value = configured.get(key)
         if isinstance(value, str) and value.strip():
             result[key] = value.strip()
+
+    # Unlike H1, these optional first-screen texts can be explicitly hidden.
+    for key in ("hero_tagline", "hero_description"):
+        if isinstance(configured.get(key), str):
+            result[key] = configured[key].strip()
 
     sections = configured.get("directions_sections")
     if isinstance(sections, list):
