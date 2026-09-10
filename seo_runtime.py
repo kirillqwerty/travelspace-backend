@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from rich_text import render_inline, plain_text
 from homepage import home_benefits_content, home_page_content, is_home_faq
 from storage import get_by, list_items, load
 
@@ -291,13 +292,24 @@ def _strip_html(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+_RICH_LINK_GAP_RE = re.compile(
+    r"\](?:\s|\u200b|\ufeff|&nbsp;|&#(?:32|160);|&#x(?:20|a0);)*\(",
+    re.IGNORECASE,
+)
+
+
+def _normalize_rich_links(value: Any) -> str:
+    return _RICH_LINK_GAP_RE.sub("](", str(value or ""))
+
+
 def _strip_rich_text(value: Any) -> str:
-    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", str(value or ""))
-    return _strip_html(text)
+    return plain_text(value)
 
 
 def _limit(value: Any, max_len: int) -> str:
-    text = _strip_html(value)
+    # Previews and metadata must contain readable link labels, never the raw
+    # Markdown notation saved by the editor.
+    text = _strip_rich_text(value)
     if len(text) <= max_len:
         return text
     return text[: max_len - 1].rstrip(" ,.;:-") + "…"
@@ -383,6 +395,8 @@ EDITABLE_SEO_HUB_FIELDS = (
     *OPTIONAL_SEO_HUB_FIELDS,
     *SEO_HUB_LIST_FIELDS,
     SEO_HUB_TOUR_FIELD,
+    "label",
+    "custom",
 )
 
 
@@ -476,6 +490,56 @@ def seo_hubs_with_defaults(settings: Any) -> dict[str, dict[str, Any]]:
         if selected.get("content_updated_at"):
             item["content_updated_at"] = selected["content_updated_at"]
         result[slug] = item
+
+    for slug, selected in configured.items():
+        if slug in result or not isinstance(selected, dict):
+            continue
+        if selected.get("custom") is not True:
+            continue
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", str(slug)):
+            continue
+        if get_by("tours", "slug", slug):
+            # A public URL cannot represent a tour and an SEO hub at once.
+            continue
+
+        label = str(selected.get("label") or selected.get("heading") or slug).strip()
+        item = {
+            "custom": True,
+            "label": label,
+            "path": f"/tours/{slug}",
+            "title": str(selected.get("title") or f"{label} | TRAVELSPACE").strip(),
+            "description": str(selected.get("description") or "").strip(),
+            "heading": str(selected.get("heading") or label).strip(),
+            "intro": str(selected.get("intro") or "").strip(),
+        }
+        for field in OPTIONAL_SEO_HUB_FIELDS:
+            item[field] = str(
+                selected.get(field)
+                if field in selected
+                else EMPTY_LANDING_CONTENT.get(field, "")
+                or ""
+            ).strip()
+        item["content_sections"] = _seo_hub_sections(
+            selected.get("content_sections")
+        )
+        item["faq_items"] = _seo_hub_faq(selected.get("faq_items"))
+        # Custom hubs are always curated manually. An empty list is valid.
+        item[SEO_HUB_TOUR_FIELD] = _seo_hub_tour_ids(
+            selected.get(SEO_HUB_TOUR_FIELD)
+        )
+        if selected.get("content_updated_at"):
+            item["content_updated_at"] = selected["content_updated_at"]
+        result[slug] = item
+    return result
+
+
+def _landing_pages(settings: Any | None = None) -> dict[str, dict[str, Any]]:
+    settings_dict = _settings() if settings is None else settings
+    hubs = seo_hubs_with_defaults(settings_dict)
+    result: dict[str, dict[str, Any]] = {}
+    for slug, hub in hubs.items():
+        path = f"/tours/{slug}"
+        result[path] = {**LANDING_PAGES.get(path, {}), **hub}
     return result
 
 
@@ -579,7 +643,7 @@ def _tour_is_air(tour: dict[str, Any]) -> bool:
 
 
 def tours_for_landing(path: str) -> list[dict[str, Any]]:
-    config = LANDING_PAGES.get(_clean_path(path), {})
+    config = _landing_pages().get(_clean_path(path), {})
     tours = [tour for tour in list_items("tours") if is_listed_tour(tour)]
     selected = seo_hubs_with_defaults(_settings()).get(
         _seo_hub_slug(path), {}
@@ -618,7 +682,12 @@ def _static_seo(path: str) -> dict[str, Any]:
     result = {
         "title": selected.get("title") or fallback["title"],
         "description": selected.get("description") or fallback["description"],
-        "heading": home_content["h1"] if home_content else fallback["heading"],
+        "heading": (
+            home_content["h1"]
+            if home_content
+            else selected.get("visible_heading") or fallback["heading"]
+        ),
+        "intro": str(selected.get("visible_description") or "").strip(),
         "image": selected.get("image") or settings.get("seo_default_image") or DEFAULT_IMAGE,
         "no_index": bool(selected.get("no_index", False)),
         "type": "website",
@@ -629,10 +698,10 @@ def _static_seo(path: str) -> dict[str, Any]:
             faq_entities.append(
                 {
                     "@type": "Question",
-                    "name": _strip_html(item.get("question")),
+                    "name": _strip_rich_text(item.get("question")),
                     "acceptedAnswer": {
                         "@type": "Answer",
-                        "text": _strip_html(item.get("answer")),
+                        "text": _strip_rich_text(item.get("answer")),
                     },
                 }
             )
@@ -645,27 +714,83 @@ def _static_seo(path: str) -> dict[str, Any]:
         faq_entities = [
             {
                 "@type": "Question",
-                "name": _strip_html(item.get("question")),
+                "name": _strip_rich_text(item.get("question")),
                 "acceptedAnswer": {
                     "@type": "Answer",
-                    "text": _strip_html(item.get("answer")),
+                    "text": _strip_rich_text(item.get("answer")),
                 },
             }
             for item in list_items("faq")
             if item.get("active", True)
-            and _strip_html(item.get("question"))
-            and _strip_html(item.get("answer"))
+            and _strip_rich_text(item.get("question"))
+            and _strip_rich_text(item.get("answer"))
         ]
         if faq_entities:
             result["structured_data"] = {
                 "@type": "FAQPage",
                 "mainEntity": faq_entities,
             }
+    elif path == "/reviews":
+        reviews = sort_reviews(
+            item
+            for item in list_items("reviews")
+            if item.get("active", True) and _strip_rich_text(item.get("text"))
+        )
+        if reviews:
+            result["structured_data"] = {
+                "@type": "ItemList",
+                "itemListElement": [
+                    {
+                        "@type": "ListItem",
+                        "position": index + 1,
+                        "item": {
+                            "@type": "Review",
+                            "author": {
+                                "@type": "Person",
+                                "name": _strip_html(review.get("name"))
+                                or "Клиент TRAVELSPACE",
+                            },
+                            "reviewBody": _strip_rich_text(review.get("text")),
+                            **(
+                                {
+                                    "datePublished": _review_date(
+                                        review.get("date")
+                                    ).date().isoformat()
+                                }
+                                if _review_date(review.get("date"))
+                                else {}
+                            ),
+                            "reviewRating": {
+                                "@type": "Rating",
+                                "ratingValue": _review_rating(
+                                    review.get("rating")
+                                ),
+                                "bestRating": 5,
+                            },
+                            "itemReviewed": {
+                                "@type": "TravelAgency",
+                                "name": "TRAVELSPACE",
+                            },
+                        },
+                    }
+                    for index, review in enumerate(reviews)
+                ],
+            }
+    faq_items = [item for item in selected.get("faq_items", []) if isinstance(item, dict) and _strip_rich_text(item.get("question")) and _strip_rich_text(item.get("answer"))]
+    result["page_faq_items"] = faq_items
+    result["page_faq_title"] = selected.get("faq_title") or "Частые вопросы"
+    if faq_items:
+        extra_faq = {"@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": _strip_rich_text(item["question"]), "acceptedAnswer": {"@type": "Answer", "text": _strip_rich_text(item["answer"])}} for item in faq_items]}
+        existing = result.get("structured_data")
+        if existing and existing.get("@type") == "FAQPage":
+            existing["mainEntity"].extend(extra_faq["mainEntity"])
+        else:
+            result["structured_data"] = {"@graph": [existing, extra_faq]} if existing else extra_faq
     return result
 
 
 def _landing_seo(path: str) -> dict[str, Any]:
-    config = LANDING_PAGES[path]
+    config = _landing_pages().get(path, {})
     selected = seo_hubs_with_defaults(_settings()).get(_seo_hub_slug(path), {})
     result = {
         **config,
@@ -791,7 +916,7 @@ def get_http_status_for_path(path: str) -> int:
     path = _clean_path(path)
     if path.startswith("/admin"):
         return 200
-    if path in STATIC_PAGE_FALLBACKS or path in LANDING_PAGES or path in SERVICE_PAGES:
+    if path in STATIC_PAGE_FALLBACKS or path in _landing_pages() or path in SERVICE_PAGES:
         return 200
     if path.startswith("/tours/"):
         slug = path.removeprefix("/tours/")
@@ -816,7 +941,7 @@ def get_seo_for_path(path: str) -> dict[str, Any]:
             "no_index": True,
             "type": "website",
         }
-    if path in LANDING_PAGES:
+    if path in _landing_pages():
         return _landing_seo(path)
     if path.startswith("/tours/"):
         return _tour_seo(path.removeprefix("/tours/").split("/", 1)[0], path)
@@ -893,7 +1018,8 @@ def _structured_graph(path: str, seo: dict[str, Any]) -> dict[str, Any]:
             "itemListElement": breadcrumbs,
         })
     if seo.get("structured_data"):
-        graph.append({key: value for key, value in seo["structured_data"].items() if key != "@context"})
+        structured = seo["structured_data"]
+        graph.extend(structured.get("@graph", [{key: value for key, value in structured.items() if key != "@context"}]))
     return _safe_json({"@context": "https://schema.org", "@graph": graph})
 
 
@@ -960,40 +1086,17 @@ def _safe_rich_href(value: Any) -> str | None:
     return None
 
 
-def _render_rich_text_segment(value: Any) -> str:
-    rendered = escape(str(value or ""))
-    rendered = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", rendered)
-    rendered = re.sub(r"__([^_]+)__", r"<u>\1</u>", rendered)
-    rendered = re.sub(r"(?<!_)_([^_]+)_(?!_)", r"<em>\1</em>", rendered)
-    return rendered
-
-
 def _render_rich_inline(value: Any) -> str:
-    text = str(value or "")
-    result: list[str] = []
-    cursor = 0
-    for match in re.finditer(r"\[([^\]]+)\]\(([^)]+)\)", text):
-        result.append(_render_rich_text_segment(text[cursor : match.start()]))
-        label, raw_href = match.groups()
-        href = _safe_rich_href(raw_href)
-        if href:
-            result.append(
-                f'<a href="{escape(href, quote=True)}" target="_blank" rel="noopener noreferrer">'
-                f"{_render_rich_text_segment(label)}</a>"
-            )
-        else:
-            result.append(_render_rich_text_segment(label))
-        cursor = match.end()
-    result.append(_render_rich_text_segment(text[cursor:]))
-    return "".join(result)
+    return render_inline(value)
 
 
 def _render_rich_paragraphs(value: Any, limit: int | None = None) -> str:
     if not isinstance(value, str):
         return _render_paragraphs(value, limit=limit)
+    value = _normalize_rich_links(value).replace("\r\n", "\n")
     blocks = [
         block.strip()
-        for block in re.split(r"\n\s*\n", value.replace("\r\n", "\n"))
+        for block in re.split(r"\n\s*\n", value)
         if block.strip()
     ]
     selected = blocks if limit is None else blocks[:limit]
@@ -1008,7 +1111,8 @@ def _render_rich_paragraphs(value: Any, limit: int | None = None) -> str:
 def _render_paragraphs(value: Any, limit: int | None = 8, semantic_headings: bool = False) -> str:
     chunks: list[str] = []
     if isinstance(value, str):
-        chunks = [part.strip() for part in re.split(r"\n\s*\n|\r?\n", value) if part.strip()]
+        normalized = _normalize_rich_links(value)
+        chunks = [part.strip() for part in re.split(r"\n\s*\n|\r?\n", normalized) if part.strip()]
     else:
         chunks = _flatten_text(value, preserve_rich=True)
     rendered: list[str] = []
@@ -1040,6 +1144,39 @@ def _content_order(item: dict[str, Any]) -> tuple[float, str]:
     return order, str(item.get("question") or item.get("title") or "")
 
 
+def _review_date(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for pattern in ("%d.%m.%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text[:10], pattern)
+        except ValueError:
+            continue
+    return None
+
+
+def sort_reviews(items: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Newest dated reviews first; undated legacy entries always come last."""
+
+    def key(item: dict[str, Any]) -> tuple[int, float, tuple[float, str]]:
+        published = _review_date(item.get("date"))
+        return (
+            0 if published else 1,
+            -published.timestamp() if published else 0,
+            _content_order(item),
+        )
+
+    return sorted(items, key=key)
+
+
+def _review_rating(value: Any) -> int:
+    try:
+        return max(1, min(5, int(value or 5)))
+    except (TypeError, ValueError):
+        return 5
+
+
 def _home_faq_items() -> list[dict[str, Any]]:
     items = [item for item in list_items("faq") if is_home_faq(item)]
     return sorted(items, key=_content_order)
@@ -1063,6 +1200,49 @@ def _render_tour_gallery(tour: dict[str, Any]) -> str:
             f'src="{escape(_absolute_url(image), quote=True)}" alt="{escape(alt, quote=True)}" /></figure>'
         )
     return "".join(figures)
+
+
+def _render_tour_videos(tour: dict[str, Any]) -> str:
+    videos = tour.get("videos") if isinstance(tour.get("videos"), list) else []
+    rendered: list[str] = []
+    for video in videos:
+        if not isinstance(video, dict):
+            continue
+        url = str(video.get("url") or video.get("video_url") or "").strip()
+        parsed = urlparse(url)
+        hostname = str(parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not (
+            hostname == "youtu.be"
+            or hostname == "youtube.com"
+            or hostname.endswith(".youtube.com")
+        ):
+            continue
+        title = _strip_html(video.get("title")) or "Видео о туре"
+        description = _render_rich_paragraphs(video.get("description"))
+        rendered.append(
+            "<li>"
+            f'<a href="{escape(url, quote=True)}">{escape(title)}</a>'
+            + description
+            + "</li>"
+        )
+    return "<ul>" + "".join(rendered) + "</ul>" if rendered else ""
+
+
+def _render_related_tours(tour: dict[str, Any]) -> str:
+    slugs = (
+        tour.get("related_tour_slugs")
+        if isinstance(tour.get("related_tour_slugs"), list)
+        else [tour.get("related_tour_slug")]
+    )
+    rendered: list[str] = []
+    for slug in slugs:
+        related = get_by("tours", "slug", str(slug))
+        if not is_listed_tour(related) or related.get("slug") == tour.get("slug"):
+            continue
+        rendered.append(
+            f"<li>{_link('/tours/' + related['slug'], related.get('title'))}</li>"
+        )
+    return "<ul>" + "".join(rendered) + "</ul>" if rendered else ""
 
 
 def _render_tour_program(program: Any) -> str:
@@ -1134,6 +1314,8 @@ def _render_tour_dates_and_prices(tour: dict[str, Any]) -> str:
             currency = currency or tour.get("currency")
         if price not in (None, ""):
             label += f": {price} {currency or 'BYN'}"
+        if item.get("comment"):
+            label += " — " + str(item["comment"])
         if label:
             date_items.append(f"<li>{escape(label)}</li>")
     if date_items:
@@ -1236,10 +1418,16 @@ def _render_homepage_sections() -> str:
                 )
         parts.append("</ul>")
 
-    reviews = [item for item in list_items("reviews") if item.get("active", True)]
-    reviews.sort(key=_content_order)
+    reviews = sort_reviews(
+        item for item in list_items("reviews") if item.get("active", True)
+    )
     if reviews:
-        parts.append("<h2>Отзывы туристов</h2><ul>")
+        parts.append(f"<h2>{escape(content['reviews_title'])}</h2>")
+        if content.get("reviews_subtitle"):
+            parts.append(
+                f"<p>{escape(content['reviews_subtitle'])}</p>"
+            )
+        parts.append("<ul>")
         for review in reviews[:4]:
             author = _strip_html(review.get("name")) or "Турист"
             text = _strip_html(review.get("text"))
@@ -1252,7 +1440,11 @@ def _render_homepage_sections() -> str:
 
     promotions = [item for item in list_items("promotions") if item.get("active", True)]
     if promotions:
-        parts.append("<h2>Актуальные акции</h2><ul>")
+        if content.get("promotions_overline"):
+            parts.append(
+                f"<p>{escape(content['promotions_overline'])}</p>"
+            )
+        parts.append(f"<h2>{escape(content['promotions_title'])}</h2><ul>")
         for promotion in promotions[:3]:
             title = _strip_html(promotion.get("title"))
             description = _strip_html(promotion.get("description"))
@@ -1363,8 +1555,9 @@ def _render_static_page_content(path: str) -> str:
         return "".join(parts)
 
     if path == "/reviews":
-        items = [item for item in list_items("reviews") if item.get("active", True)]
-        items.sort(key=_content_order)
+        items = sort_reviews(
+            item for item in list_items("reviews") if item.get("active", True)
+        )
         parts = ["<p>Впечатления туристов о маршрутах и поездках с TRAVELSPACE.</p>"]
         for item in items:
             author = _strip_html(item.get("name")) or "Турист TRAVELSPACE"
@@ -1480,7 +1673,7 @@ def _render_seo_hub_faq(seo: dict[str, Any]) -> str:
 def _render_other_seo_hubs(current_path: str) -> str:
     links = [
         f"<li>{_link(path, config.get('heading') or 'Туры')}</li>"
-        for path, config in LANDING_PAGES.items()
+        for path, config in _landing_pages().items()
         if path != current_path
     ]
     return "<h2>Другие направления</h2><ul>" + "".join(links) + "</ul>"
@@ -1495,7 +1688,7 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         '<div data-seo-prerender="true" style="max-width:1180px;margin:0 auto;padding:24px;font-family:Arial,sans-serif">',
         _global_navigation(),
         f"<main><h1>{heading}</h1>",
-        f"<p>{escape(_limit(seo.get('description'), 360))}</p>",
+        _render_rich_paragraphs(seo.get("intro") or seo.get("description"), limit=1),
     ]
     if path == "/":
         home = home_page_content(_settings())
@@ -1505,7 +1698,7 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
     elif path == "/tours":
         parts.append("<h2>Актуальные туры</h2>")
         parts.append(_tour_list(tour for tour in list_items("tours") if is_listed_tour(tour)))
-    elif path in LANDING_PAGES:
+    elif path in _landing_pages():
         intro = _render_rich_paragraphs(seo.get("intro"))
         if intro:
             parts.append(intro)
@@ -1527,7 +1720,8 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         parts.append("<ul>")
         for article in list_items("articles"):
             if is_listed_article(article):
-                parts.append(f"<li>{_link('/blog/' + article['slug'], article.get('title'))}<p>{escape(_limit(article.get('excerpt') or article.get('content'), 260))}</p></li>")
+                preview = _limit(article.get("excerpt") or article.get("content"), 260)
+                parts.append(f"<li>{_link('/blog/' + article['slug'], article.get('title'))}<p>{escape(preview)}</p></li>")
         parts.append("</ul>")
     elif path in STATIC_PAGE_FALLBACKS:
         parts.append(_render_static_page_content(path))
@@ -1559,15 +1753,30 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             content = _render_list(tour.get(key))
             if content:
                 parts.append(f"<h2>{label}</h2>{content}")
+        videos = _render_tour_videos(tour)
+        if videos:
+            parts.append(f"<h2>Видео о туре</h2>{videos}")
         dates_and_prices = _render_tour_dates_and_prices(tour)
         if dates_and_prices:
             parts.append(f"<h2>Даты и стоимость</h2>{dates_and_prices}")
+        related = _render_related_tours(tour)
+        if related:
+            related_title = (
+                _strip_html(tour.get("related_tours_title"))
+                or "Туры, которые вас также могут заинтересовать"
+            )
+            parts.append(f"<h2>{escape(related_title)}</h2>{related}")
         faq = _render_tour_faq(tour.get("faq"))
         if faq:
             parts.append(f"<h2>Часто задаваемые вопросы</h2>{faq}")
     elif path.startswith("/blog/") and seo.get("record"):
         parts.append(_render_paragraphs(seo["record"].get("content"), limit=40, semantic_headings=True))
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
+    if seo.get("page_faq_items"):
+        parts.append(f'<section><h2>{escape(str(seo["page_faq_title"]))}</h2>')
+        for item in seo["page_faq_items"]:
+            parts.append(f'<h3>{_render_rich_inline(item["question"])}</h3>{_render_rich_paragraphs(item["answer"])}')
+        parts.append("</section>")
     parts.append("</main></div>")
     return "".join(parts)
 
@@ -1579,7 +1788,7 @@ departure_city departure_cities departureCities price price_from currency additi
 additional_currency price_type badges hero_image hero_image_alt hero_mobile hero_mobile_image
 mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
 dates chains hotels use_hotel_chains program highlights what_to_see included excluded
-important_info faq map_embed content excerpt related_tour_slugs seo_title seo_description
+important_info faq map_embed content excerpt related_tour_slugs related_tours_title videos seo_title seo_description
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
 name text rating date photo question answer show_on_home category valid_until related_tour_slug
 button_text button_url discount value subtitle tour_name
@@ -1587,7 +1796,7 @@ button_text button_url discount value subtitle tour_name
 PUBLIC_SETTINGS_FIELDS = set("""
 company_short company_name address email phone phone_link site_url work_hours header_phones
 contact_phones social_buttons call_directions map_embed_url map_iframe_url map_route_url map_url
-home_page home_benefits seo_pages seo_hubs seo_default_image
+home_page home_benefits seo_pages seo_hubs seo_default_image links_page
 """.split())
 CARD_FIELDS = set("""
 id slug title title_highlighted transport_type active hidden hide_from_catalog order tagline
@@ -1644,8 +1853,24 @@ def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
         },
         "site": {"settings": {key: value for key, value in settings.items() if key in PUBLIC_SETTINGS_FIELDS},
                  "tours": tours, "articles": articles, "ready": True},
-        "collections": {name: [_public_record(item) for item in list_items(name) if item.get("active") is not False]
-                        for name in ("reviews", "promotions", "faq")},
+        "collections": {
+            "reviews": [
+                _public_record(item)
+                for item in sort_reviews(
+                    item
+                    for item in list_items("reviews")
+                    if item.get("active") is not False
+                )
+            ],
+            **{
+                name: [
+                    _public_record(item)
+                    for item in list_items(name)
+                    if item.get("active") is not False
+                ]
+                for name in ("promotions", "faq")
+            },
+        },
     }
 
 
@@ -1669,6 +1894,10 @@ def render_index_html(path: str) -> str:
     if not clean_path.startswith(("/admin", "/api")):
         bootstrap = _script_json(_page_bootstrap(clean_path, seo))
         html = html.replace("</body>", f'<script id="page-bootstrap" type="application/json">{bootstrap}</script></body>')
+        # The production template contains a non-empty branded cover, so it
+        # stays over the snapshot. Keep the legacy empty-cover cleanup for
+        # minimal test/old templates. The noscript helper text is unnecessary
+        # because the server snapshot itself is the no-JS fallback.
         html = re.sub(r'<div\s+id="initial-load-cover"[^>]*>\s*</div>', "", html)
         html = re.sub(r'<noscript>\s*You need to enable JavaScript to run this app\.\s*</noscript>', "", html)
         fallback_css = ('<style id="server-page-style">[data-seo-prerender]{color:#171717;line-height:1.65;overflow-wrap:anywhere}'
@@ -1715,7 +1944,7 @@ def build_sitemap_xml() -> str:
                 seo_hubs.get(_seo_hub_slug(path), {}).get("content_updated_at")
             ),
         )
-        for path in LANDING_PAGES
+        for path in _landing_pages(settings)
     )
     for tour in list_items("tours"):
         if is_indexable_tour(tour):

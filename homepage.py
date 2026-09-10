@@ -26,6 +26,10 @@ DEFAULT_HOME_PAGE: dict[str, Any] = {
     ),
     "tours_title": "Популярные автобусные туры из Минска",
     "directions_title": "Куда можно поехать из Минска на автобусе",
+    "reviews_title": "Отзывы туристов",
+    "reviews_subtitle": "Что о нас говорят",
+    "promotions_overline": "Сейчас выгодно",
+    "promotions_title": "Актуальные акции",
     "directions_sections": [
         {
             "title": "Экскурсионные туры",
@@ -111,6 +115,10 @@ def home_page_content(settings: Any) -> dict[str, Any]:
         "intro_text",
         "tours_title",
         "directions_title",
+        "reviews_title",
+        "reviews_subtitle",
+        "promotions_overline",
+        "promotions_title",
         "faq_title",
     ):
         value = configured.get(key)

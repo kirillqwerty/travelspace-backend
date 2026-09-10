@@ -427,6 +427,86 @@ def test_rich_text_links_open_a_new_tab_safely():
     assert unsafe == "Первый Второй"
 
 
+def test_rich_text_links_accept_editor_and_paste_whitespace():
+    variants = [
+        "[Петербург] (https://travelspace.by/tours/peterburg)",
+        "[Петербург]\u00a0(https://travelspace.by/tours/peterburg)",
+        "[Петербург]\u200b(https://travelspace.by/tours/peterburg)",
+        "[Петербург]&#x20;(https://travelspace.by/tours/peterburg)",
+        "[Петербург]\n\n(https://travelspace.by/tours/peterburg)",
+    ]
+    for value in variants:
+        html = seo_runtime._render_rich_paragraphs(value)
+        assert (
+            '<a href="https://travelspace.by/tours/peterburg" '
+            'target="_blank" rel="noopener noreferrer">Петербург</a>'
+        ) in html
+        assert "[Петербург]" not in html
+
+    assert seo_runtime._strip_rich_text("[Петербург]&#160;(/tours/peterburg)") == "Петербург"
+
+
+def test_rich_text_links_work_inside_and_around_formatting():
+    bold_link = seo_runtime._render_rich_inline(
+        "**[Рождественский тур] (https://travelspace.by/tours/rozhdestvo)**"
+    )
+    assert bold_link == (
+        '<strong><a href="https://travelspace.by/tours/rozhdestvo" '
+        'target="_blank" rel="noopener noreferrer">Рождественский тур</a></strong>'
+    )
+
+    formatted_label = seo_runtime._render_rich_inline("[**Карелия**](/tours/kareliya)")
+    assert formatted_label == (
+        '<a href="/tours/kareliya" target="_blank" rel="noopener noreferrer">'
+        "<strong>Карелия</strong></a>"
+    )
+
+
+def test_faq_structured_data_contains_link_labels_not_markdown(monkeypatch):
+    configure_storage(monkeypatch)
+    original = FAQ[0]["answer"]
+    FAQ[0]["answer"] = "Посмотрите [тур в Грузию] (/tours/gruziya)."
+    try:
+        seo = seo_runtime.get_seo_for_path("/faq")
+        answer = seo["structured_data"]["mainEntity"][0]["acceptedAnswer"]["text"]
+        assert answer == "Посмотрите тур в Грузию."
+    finally:
+        FAQ[0]["answer"] = original
+
+    wrapped = seo_runtime._render_paragraphs(
+        "Перейдите [в Санкт-Петербург]\n(https://travelspace.by/tours/sankt-peterburg)."
+    )
+    assert '<a href="https://travelspace.by/tours/sankt-peterburg" target="_blank" rel="noopener noreferrer">в Санкт-Петербург</a>' in wrapped
+    assert seo_runtime._limit("Текст со [ссылкой](/tours/gruziya).", 100) == "Текст со ссылкой."
+
+
+def test_article_snapshot_renders_markdown_links_as_anchors(monkeypatch):
+    configure_storage(monkeypatch)
+    ARTICLES[0]["content"] = (
+        "Давайте разберёмся.\n\n"
+        "[Санкт-Петербург](https://travelspace.by/tours/avtobusniy-tur-v-peterburg-na-vyhodnye) — город для выходных."
+    )
+    try:
+        snapshot = seo_runtime._render_snapshot(
+            "/blog/public-article", seo_runtime.get_seo_for_path("/blog/public-article")
+        )
+        assert '<a href="https://travelspace.by/tours/avtobusniy-tur-v-peterburg-na-vyhodnye" target="_blank" rel="noopener noreferrer">Санкт-Петербург</a>' in snapshot
+        assert "[Санкт-Петербург](" not in snapshot
+    finally:
+        ARTICLES[0]["content"] = "Полезный текст."
+
+
+def test_blog_snapshot_strips_markdown_from_article_preview(monkeypatch):
+    configure_storage(monkeypatch)
+    ARTICLES[0]["content"] = "Текст со [ссылкой](/tours/gruziya)."
+    try:
+        snapshot = seo_runtime._render_snapshot("/blog", seo_runtime.get_seo_for_path("/blog"))
+        assert "Текст со ссылкой." in snapshot
+        assert "[ссылкой](/tours/gruziya)" not in snapshot
+    finally:
+        ARTICLES[0]["content"] = "Полезный текст."
+
+
 def test_hero_edits_and_bold_content_are_present_in_server_html(monkeypatch):
     configure_storage(monkeypatch)
     monkeypatch.setitem(SETTINGS, "home_page", {"hero_tagline": "Новый слоган", "hero_description": "Поездки **без хлопот**"})

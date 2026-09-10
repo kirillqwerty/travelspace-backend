@@ -88,6 +88,7 @@ from seo_runtime import (
     is_public_tour,
     render_index_html,
     settings_with_seo_hub_defaults,
+    sort_reviews,
     stamp_changed_seo_hubs,
 )
 from storage import (
@@ -1039,8 +1040,7 @@ async def download_tour_program(slug: str):
 @api.get("/reviews")
 async def get_reviews():
     items = [r for r in list_items("reviews") if r.get("active", True)]
-    items.sort(key=_order_value)
-    return items
+    return sort_reviews(items)
 
 
 @api.get("/articles")
@@ -1211,20 +1211,25 @@ async def admin_upload_file(
             detail="Можно загружать только изображения",
         )
 
-    ext = Path(file.filename or "").suffix.lower()
-
-    if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
-        ext = ".jpg"
-
-    filename = f"{uuid.uuid4()}{ext}"
-    path = UPLOAD_DIR / filename
-
-    content = await file.read()
+    content = await file.read(2 * 1024 * 1024 + 1)
 
     # 2 MB лимит уже после сжатия на фронте
     if len(content) > 2 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Файл слишком большой")
 
+    from io import BytesIO
+    from PIL import Image, UnidentifiedImageError
+    try:
+        with Image.open(BytesIO(content)) as image:
+            ext = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "GIF": ".gif"}.get(image.format)
+            if not ext:
+                raise ValueError("Unsupported image format")
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise HTTPException(status_code=400, detail="Не удалось прочитать изображение. Используйте JPG, PNG или WebP.")
+
+    filename = f"{uuid.uuid4()}{ext}"
+    path = UPLOAD_DIR / filename
     path.write_bytes(content)
 
     return {"url": f"/uploads/{filename}"}
