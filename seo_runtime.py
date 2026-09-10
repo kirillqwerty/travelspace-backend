@@ -1487,6 +1487,9 @@ def _render_other_seo_hubs(current_path: str) -> str:
 
 
 def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
+    # The admin interface is client-rendered and has no public SEO content.
+    if path == "/admin" or path.startswith("/admin/"):
+        return ""
     heading = escape(_strip_html(seo.get("heading") or seo.get("title") or DEFAULT_TITLE))
     parts = [
         '<div data-seo-prerender="true" style="max-width:1180px;margin:0 auto;padding:24px;font-family:Arial,sans-serif">',

@@ -96,5 +96,11 @@ def test_blank_metadata_falls_back_to_real_text(render, monkeypatch):
     assert data["seo"]["title"] == "Тур в Грузию | TRAVELSPACE"
 
 
-def test_admin_does_not_receive_public_bootstrap(render):
-    assert 'id="page-bootstrap"' not in render("/admin/login")
+@pytest.mark.parametrize("path", ["/admin", "/admin/", "/admin/login", "/admin/tours", "/admin/settings"])
+def test_admin_does_not_receive_public_bootstrap_or_snapshot(render, path):
+    document = render(path)
+    assert 'id="page-bootstrap"' not in document
+    assert 'data-seo-prerender' not in document
+    assert '<div id="root"></div>' in document
+    assert 'name="robots" content="noindex, follow"' in document
+    assert seo_runtime.get_http_status_for_path(path) == 200
