@@ -4,6 +4,10 @@ from html import escape
 from urllib.parse import urlsplit
 
 
+_URL_RE = re.compile(r"https?://[^\s<>]+", flags=re.I)
+_ICON_RE = re.compile(r":(check|minus|warning|triangle):")
+
+
 def normalize(value):
     return re.sub(r"\](?:\s|\u200b|\ufeff|&nbsp;|&#(?:32|160);|&#x(?:20|a0);)*\(", "](", str(value or ""), flags=re.I)
 
@@ -63,18 +67,21 @@ def tokens(value, depth=0):
             label, href, i = link
             result.append({"type": "link", "href": href, "children": tokens(label, depth + 1)})
             continue
-        url = re.match(r"https?://[^\s<>]+", text[i:], flags=re.I)
+        # Match against the original string at the current offset. Slicing the
+        # entire remaining string on every character made long article text
+        # quadratic and added hundreds of milliseconds to every HTML response.
+        url = _URL_RE.match(text, i)
         if url:
-            href = re.sub(r"[.,!?:;]+$", "", url[0])
+            href = re.sub(r"[.,!?:;]+$", "", url.group(0))
             while href.endswith(")") and href.count(")") > href.count("("):
                 href = href[:-1]
             result.append({"type": "link", "href": href, "children": [{"type": "text", "text": href}]})
             i += len(href)
             continue
-        icon = re.match(r":(check|minus|warning|triangle):", text[i:])
+        icon = _ICON_RE.match(text, i)
         if icon:
-            result.append({"type": "icon", "text": icon[0]})
-            i += len(icon[0])
+            result.append({"type": "icon", "text": icon.group(0)})
+            i = icon.end()
             continue
         marker = "**" if text.startswith("**", i) else "___" if text.startswith("___", i) else "__" if text.startswith("__", i) else "_" if text[i] == "_" else None
         end = -1

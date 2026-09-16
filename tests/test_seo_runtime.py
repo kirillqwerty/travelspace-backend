@@ -269,6 +269,10 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
                 "heading": "Новый H1 Санкт-Петербурга",
                 "intro": "Первый абзац.\n\n[Подробный тур](/tours/public-tour).",
                 "catalog_title": "Актуальные туры в Санкт-Петербург из Минска",
+                "cover_image": "/uploads/hub-cover.jpg",
+                "cover_alt": "Панорама Санкт-Петербурга",
+                "youtube_title": "Санкт-Петербург глазами путешественника",
+                "youtube_url": '<iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0"></iframe>',
                 "content_title": "Полезный H2 после каталога",
                 "content_body": "Основной текст со [ссылкой](/tours/gruziya).",
                 "content_sections": [
@@ -296,27 +300,38 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
     assert seo["title"] == "Новый Title хаба | TRAVELSPACE"
     assert seo["description"] == "Новое описание хаба."
     assert seo["image"] == "/uploads/hub-preview.jpg"
+    assert seo["cover_image"] == "/uploads/hub-cover.jpg"
+    assert seo["cover_alt"] == "Панорама Санкт-Петербурга"
     assert "<h1>Новый H1 Санкт-Петербурга</h1>" in snapshot
+    assert 'data-hub-cover="true"' in snapshot
+    assert 'src="/uploads/hub-cover.jpg"' in snapshot
+    assert 'alt="Панорама Санкт-Петербурга"' in snapshot
+    assert 'width="1600" height="1000"' in snapshot
     assert '<a href="/tours/public-tour" target="_blank" rel="noopener noreferrer">Подробный тур</a>' in snapshot
     assert "<h2>Актуальные туры в Санкт-Петербург из Минска</h2>" in snapshot
+    assert 'data-hub-youtube="true"' in snapshot
+    assert "<h2>Санкт-Петербург глазами путешественника</h2>" in snapshot
+    assert "https://www.youtube.com/watch?v=dQw4w9WgXcQ" in snapshot
     assert "<h2>Полезный H2 после каталога</h2>" in snapshot
     assert "<h3>Первый H3</h3>" in snapshot
     assert '<a href="/tours/gruziya" target="_blank" rel="noopener noreferrer">ссылкой</a>' in snapshot
     assert "<h2>Как выбрать тур в Санкт-Петербург</h2>" in snapshot
-    assert "<h2>Другие направления</h2>" in snapshot
+    assert "<h2>Другие направления</h2>" not in snapshot
     assert "<h2>Частые вопросы о Санкт-Петербурге</h2>" in snapshot
     assert "<h3>Как забронировать поездку?</h3>" in snapshot
     assert '<a href="/contacts" target="_blank" rel="noopener noreferrer">заявку</a>' in snapshot
     assert snapshot.index(
         "<h2>Актуальные туры в Санкт-Петербург из Минска</h2>"
     ) < snapshot.index(
+        'data-hub-youtube="true"'
+    ) < snapshot.index(
         "<h2>Полезный H2 после каталога</h2>"
     )
+    assert snapshot.index("<h1>Новый H1 Санкт-Петербурга</h1>") < snapshot.index(
+        'data-hub-cover="true"'
+    ) < snapshot.index("Первый абзац.")
     assert snapshot.index("<h2>Полезный H2 после каталога</h2>") < snapshot.index(
         "<h2>Как выбрать тур в Санкт-Петербург</h2>"
-    )
-    assert snapshot.index("<h2>Другие направления</h2>") < snapshot.index(
-        "<h2>Частые вопросы о Санкт-Петербурге</h2>"
     )
     meta = seo_runtime._render_meta_block("/tours/sankt-peterburg", seo)
     assert '"@type":"FAQPage"' in meta
@@ -346,6 +361,17 @@ def test_bus_hub_has_complete_editable_content_defaults(monkeypatch):
     assert '"@type":"FAQPage"' in seo_runtime._render_meta_block(
         "/tours/avtobusnye-iz-minska", seo
     )
+
+
+def test_hub_youtube_parser_accepts_supported_formats_and_rejects_html():
+    video_id = "dQw4w9WgXcQ"
+    assert seo_runtime._youtube_video_id(video_id) == video_id
+    assert seo_runtime._youtube_video_id(f"https://youtu.be/{video_id}?t=5") == video_id
+    assert seo_runtime._youtube_video_id(
+        f'<iframe src="https://www.youtube.com/embed/{video_id}"></iframe>'
+    ) == video_id
+    assert seo_runtime._youtube_video_id("https://example.com/dQw4w9WgXcQ") == ""
+    assert seo_runtime._youtube_video_id('<script>alert("x")</script>') == ""
 
 
 def test_manual_hub_tour_order_overrides_keywords_and_excludes_hidden(monkeypatch):

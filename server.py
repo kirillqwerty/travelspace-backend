@@ -10,11 +10,14 @@ FastAPI serves the React build and injects runtime SEO meta for page URLs.
 
 from __future__ import annotations
 
+from article_content import sync_article_text
+
 import asyncio
 import logging
 import os
 import re
 import smtplib
+from functools import lru_cache
 import uuid
 from contextlib import suppress
 from copy import deepcopy
@@ -44,6 +47,7 @@ from fastapi import (
     File,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -149,6 +153,39 @@ class HeadAsGetMiddleware:
         await self.app(get_scope, receive, send_head)
 
 
+class SelectiveGZipMiddleware:
+    """Compress HTML, JSON, CSS and JS without recompressing media files."""
+
+    ALREADY_COMPRESSED_SUFFIXES = {
+        ".avif",
+        ".gif",
+        ".gz",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".mp3",
+        ".mp4",
+        ".pdf",
+        ".png",
+        ".webm",
+        ".webp",
+        ".woff",
+        ".woff2",
+        ".zip",
+    }
+
+    def __init__(self, app, minimum_size: int = 1000):
+        self.app = app
+        self.gzip_app = GZipMiddleware(app, minimum_size=minimum_size)
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope.get("type") == "http" else ""
+        if Path(path).suffix.lower() in self.ALREADY_COMPRESSED_SUFFIXES:
+            await self.app(scope, receive, send)
+            return
+        await self.gzip_app(scope, receive, send)
+
+
 # All tour-date retention rules use Belarus local time (UTC+3).
 BELARUS_TIMEZONE = ZoneInfo("Europe/Minsk")
 DEFAULT_AUTO_DELETE_DAYS_BEFORE = 0
@@ -180,6 +217,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(HeadAsGetMiddleware)
+app.add_middleware(SelectiveGZipMiddleware, minimum_size=1000)
 
 
 def _cookie_secure() -> bool:
@@ -216,6 +254,20 @@ async def security_headers(request: Request, call_next):
         )
     if request.url.path.startswith(("/api/auth", "/api/admin")):
         response.headers["Cache-Control"] = "no-store"
+    elif request.url.path.startswith(("/static/", "/uploads/", "/fonts/")):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif request.url.path.startswith("/media/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif request.url.path in {
+        "/background-journey.mp4",
+        "/og-image.jpg",
+        "/favicon.ico",
+        "/favicon.png",
+        "/favicon-48x48.png",
+        "/apple-touch-icon.png",
+        "/manifest.json",
+    }:
+        response.headers["Cache-Control"] = "public, max-age=604800"
     return response
 
 
@@ -1365,6 +1417,11 @@ def _content_changed(existing: dict, payload: dict) -> bool:
 
 
 def _normalize_content_seo(name: str, item: dict, existing: dict | None = None) -> None:
+    if name == "articles":
+        try:
+            sync_article_text(item)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
     if name not in CONTENT_COLLECTIONS:
         return
     slug = item.get("slug") or (existing or {}).get("slug")
@@ -1646,6 +1703,39 @@ async def background_journey_video():
     return _frontend_file_response("background-journey.mp4")
 
 
+@app.get("/media/{filename}", include_in_schema=False)
+def optimized_media(filename: str, width: int = 800):
+    """Serve a cached, resized WebP variant of an immutable uploaded image."""
+    if Path(filename).name != filename:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    source = (UPLOAD_DIR / filename).resolve()
+    if not str(source).startswith(str(UPLOAD_DIR)) or not source.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+
+    width = min(1600, max(160, width))
+    cache_dir = UPLOAD_DIR / ".optimized"
+    cache_dir.mkdir(exist_ok=True)
+    cache_file = cache_dir / f"{source.stem}-{width}.webp"
+
+    if not cache_file.is_file() or cache_file.stat().st_mtime < source.stat().st_mtime:
+        try:
+            from PIL import Image, ImageOps, UnidentifiedImageError
+
+            with Image.open(source) as opened:
+                image = ImageOps.exif_transpose(opened)
+                if image.width > width:
+                    target_height = max(1, round(image.height * width / image.width))
+                    image = image.resize((width, target_height), Image.Resampling.LANCZOS)
+                if image.mode not in {"RGB", "RGBA"}:
+                    image = image.convert("RGB")
+                image.save(cache_file, "WEBP", quality=78, method=4)
+        except (UnidentifiedImageError, OSError, ValueError):
+            raise HTTPException(status_code=404, detail="Image not available")
+
+    return FileResponse(str(cache_file), media_type="image/webp")
+
+
 @app.get("/static/{file_path:path}", include_in_schema=False)
 async def serve_react_static(file_path: str):
     static_root = (FRONTEND_BUILD_DIR / "static").resolve()
@@ -1678,7 +1768,7 @@ async def serve_react_app(full_path: str):
     if redirect_to:
         return RedirectResponse(redirect_to, status_code=301)
 
-    html = render_index_html(path)
+    html, status_code = _cached_public_page(path, _public_page_signature())
 
     if not html:
         raise HTTPException(
@@ -1689,8 +1779,36 @@ async def serve_react_app(full_path: str):
             ),
         )
 
-    status_code = get_http_status_for_path(path)
     return HTMLResponse(html, status_code=status_code)
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    try:
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
+    except OSError:
+        return 0, 0
+
+
+def _public_page_signature() -> tuple:
+    """Change the cache key whenever public data or the frontend build changes."""
+    data_files = tuple(
+        (path.name, *_file_signature(path))
+        for path in sorted(STORAGE_DATA_DIR.glob("*.json"))
+    )
+    return (
+        _file_signature(FRONTEND_BUILD_DIR / "index.html"),
+        _file_signature(FRONTEND_BUILD_DIR / "asset-manifest.json"),
+        data_files,
+    )
+
+
+@lru_cache(maxsize=128)
+def _cached_public_page(path: str, signature: tuple) -> tuple[str, int]:
+    # The signature is deliberately part of the key; the value itself is only
+    # needed to invalidate entries after an admin save or a frontend deploy.
+    del signature
+    return render_index_html(path), get_http_status_for_path(path)
 
 
 # ---------- Startup --------------------------------------------------------

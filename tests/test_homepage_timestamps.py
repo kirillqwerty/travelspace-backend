@@ -95,6 +95,34 @@ def test_only_changed_seo_hub_receives_new_lastmod():
     )
 
 
+def test_changed_hub_cover_receives_new_lastmod():
+    before = {
+        "seo_hubs": {
+            "gruziya": {
+                "title": "Старый Title",
+                "description": "Описание",
+                "heading": "Туры в Грузию",
+                "intro": "Вводный текст",
+                "cover_image": "",
+                "content_updated_at": "2026-08-20T10:00:00+03:00",
+            }
+        }
+    }
+    after = deepcopy(before)
+    after["seo_hubs"]["gruziya"]["cover_image"] = "/uploads/gruziya-hub.jpg"
+
+    stamped = stamp_changed_seo_hubs(
+        before,
+        after,
+        "2026-08-28T17:00:00+03:00",
+    )
+
+    assert (
+        stamped["seo_hubs"]["gruziya"]["content_updated_at"]
+        == "2026-08-28T17:00:00+03:00"
+    )
+
+
 def test_changed_hub_faq_receives_new_lastmod():
     before = {
         "seo_hubs": {

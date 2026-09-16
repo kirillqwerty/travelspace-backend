@@ -6,6 +6,8 @@ public URL. React replaces the snapshot after it starts in the browser.
 
 from __future__ import annotations
 
+from article_content import article_blocks
+
 import json
 import os
 import re
@@ -98,6 +100,10 @@ STATIC_PAGE_FALLBACKS: dict[str, dict[str, str]] = {
 
 EMPTY_LANDING_CONTENT: dict[str, Any] = {
     "catalog_title": "Выберите подходящий тур",
+    "cover_image": "",
+    "cover_alt": "",
+    "youtube_title": "",
+    "youtube_url": "",
     "content_title": "",
     "content_body": "",
     "content_sections": [],
@@ -316,7 +322,11 @@ def _limit(value: Any, max_len: int) -> str:
 
 
 def _first_text(*values: Any) -> str:
-    return next((_strip_rich_text(value) for value in values if _strip_rich_text(value)), "")
+    for value in values:
+        text = _strip_rich_text(value)
+        if text:
+            return text
+    return ""
 
 
 def _absolute_url(value: str | None) -> str:
@@ -382,6 +392,10 @@ def _settings() -> dict[str, Any]:
 REQUIRED_SEO_HUB_FIELDS = ("title", "description", "heading", "intro")
 OPTIONAL_SEO_HUB_FIELDS = (
     "catalog_title",
+    "cover_image",
+    "cover_alt",
+    "youtube_title",
+    "youtube_url",
     "content_title",
     "content_body",
     "how_to_title",
@@ -1342,16 +1356,6 @@ def _global_navigation() -> str:
     links = [
         ("/", "Главная"),
         ("/tours", "Все туры"),
-        ("/tours/avtobusnye-iz-minska", "Автобусные туры"),
-        ("/tours/avia-iz-minska", "Авиа туры"),
-        ("/tours/gruziya", "Грузия"),
-        ("/tours/sankt-peterburg", "Санкт-Петербург"),
-        ("/tours/dagestan", "Дагестан"),
-        ("/tours/kareliya", "Карелия"),
-        ("/tours/abhaziya", "Абхазия"),
-        ("/tours/severnaya-osetiya", "Северная Осетия"),
-        ("/tours/moskva", "Москва"),
-        ("/tours/arktika", "Арктика"),
         ("/promotions", "Акции"),
         ("/blog", "Блог"),
         ("/reviews", "Отзывы"),
@@ -1670,26 +1674,178 @@ def _render_seo_hub_faq(seo: dict[str, Any]) -> str:
     )
 
 
-def _render_other_seo_hubs(current_path: str) -> str:
-    links = [
-        f"<li>{_link(path, config.get('heading') or 'Туры')}</li>"
-        for path, config in _landing_pages().items()
-        if path != current_path
-    ]
-    return "<h2>Другие направления</h2><ul>" + "".join(links) + "</ul>"
+def _render_article_body(article: dict[str, Any]) -> str:
+    parts = []
+    for block in article_blocks(article):
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            parts.append(_render_paragraphs(block.get("text"), limit=None, semantic_headings=True))
+        elif block.get("type") == "image":
+            src = str(block.get("src") or "").strip()
+            if not src or not (src.startswith("/") and not src.startswith("//") or src.startswith(("https://", "http://"))):
+                continue
+            alt = str(block.get("alt") or article.get("seo_h1") or article.get("title") or "")
+            parts.append(f'<figure><img src="{escape(_absolute_url(src), quote=True)}" alt="{escape(alt, quote=True)}" width="1200" height="750" loading="lazy"></figure>')
+    return "".join(parts)
+
+
+def _build_asset(name: str) -> str:
+    """Resolve the current build's hashed asset without guessing filenames."""
+    try:
+        manifest = json.loads((FRONTEND_BUILD_DIR / "asset-manifest.json").read_text(encoding="utf-8"))
+        return manifest.get("files", {}).get(name, "")
+    except (OSError, ValueError):
+        return ""
+
+
+def _home_first_screen() -> str:
+    home = home_page_content(_settings())
+    logo = _build_asset("static/media/logo-travelspace-white.webp") or _build_asset("static/media/logo-travelspace-white.png")
+    brand = (f'<img src="{escape(logo, quote=True)}" alt="TRAVELSPACE" width="165" height="28">'
+             if logo else "TRAVELSPACE")
+    return (
+        '<div data-seo-prerender="true" data-home-prerender="true">'
+        '<header class="server-home-header">'
+        f'<a href="/" aria-label="TRAVELSPACE — главная">{brand}</a>'
+        '<a href="#server-navigation" aria-label="Меню"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></a>'
+        '</header><main><section class="home-hero"><div class="home-hero-content">'
+        f'<h1>{escape(home["h1"])}</h1>'
+        + (f'<div class="home-hero-tagline">{_render_rich_paragraphs(home["hero_tagline"])}</div>' if home.get("hero_tagline") else "")
+        + (f'<div class="home-hero-description">{_render_rich_paragraphs(home["hero_description"])}</div>' if home.get("hero_description") else "")
+        + '<div class="home-hero-actions"><a href="/#avtobusnie-tury">Выбрать тур <span aria-hidden="true">→</span></a>'
+        '<a href="/contacts">Получить консультацию</a></div></div></section>'
+        '<div class="server-home-copy"><div id="server-navigation">'
+        + _global_navigation() + '</div><div id="avtobusnie-tury">'
+        + _render_homepage_sections() + '</div></div></main></div>'
+    )
+
+
+def _render_seo_hub_cover(seo: dict[str, Any]) -> str:
+    src = str(seo.get("cover_image") or "").strip()
+    if not src or not (
+        (src.startswith("/") and not src.startswith("//"))
+        or src.startswith(("https://", "http://"))
+    ):
+        return ""
+    alt = _strip_html(seo.get("cover_alt") or seo.get("heading"))
+    return (
+        '<figure data-hub-cover="true">'
+        f'<img src="{escape(src, quote=True)}" alt="{escape(alt, quote=True)}" '
+        'width="1600" height="1000" loading="eager" decoding="async" '
+        'style="width:100%;height:auto;aspect-ratio:8/5;object-fit:cover;object-position:center">'
+        '</figure>'
+    )
+
+
+def _youtube_video_id(value: Any) -> str:
+    source = str(value or "").strip()
+    if not source:
+        return ""
+    iframe_src = re.search(
+        r'<iframe\b[^>]*\bsrc=["\']([^"\']+)["\']',
+        source,
+        flags=re.IGNORECASE,
+    )
+    if iframe_src:
+        source = iframe_src.group(1)
+    source = source.replace("&amp;", "&")
+    if re.fullmatch(r"[A-Za-z0-9_-]{11}", source):
+        return source
+    for pattern in (
+        r"(?:youtube(?:-nocookie)?\.com)/(?:embed|shorts|live)/([A-Za-z0-9_-]{11})",
+        r"youtu\.be/([A-Za-z0-9_-]{11})",
+        r"[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)",
+    ):
+        match = re.search(pattern, source, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _render_seo_hub_video(seo: dict[str, Any]) -> str:
+    video_id = _youtube_video_id(seo.get("youtube_url"))
+    if not video_id:
+        return ""
+    heading = _strip_html(seo.get("heading")) or "TRAVELSPACE"
+    title = _strip_html(seo.get("youtube_title")) or f"Видео: {heading}"
+    href = f"https://www.youtube.com/watch?v={video_id}"
+    return (
+        f'<section data-hub-youtube="true"><h2>{escape(title)}</h2><p>'
+        f'<a href="{escape(href, quote=True)}" rel="noopener noreferrer">'
+        'Посмотреть видео на YouTube</a></p></section>'
+    )
+
+
+def _home_render_assets(html: str) -> str:
+    """Keep the first screen renderable without embedding the entire CSS file."""
+    def defer_stylesheet(match):
+        tag = match.group(0)
+        href = re.search(r'href=["\'](/static/css/[^"\']+\.css)["\']', tag)
+        if not href or not re.search(r'rel=["\']stylesheet["\']', tag):
+            return tag
+        asset_path = FRONTEND_BUILD_DIR / href.group(1).lstrip("/")
+        if not asset_path.is_file():
+            return tag
+        url = escape(href.group(1), quote=True)
+        return (
+            f'<link rel="preload" as="style" href="{url}" '
+            'onload="this.onload=null;this.rel=\'stylesheet\'">'
+            f'<noscript><link rel="stylesheet" href="{url}"></noscript>'
+        )
+
+    html = re.sub(r'<link\b[^>]*>', defer_stylesheet, html, flags=re.IGNORECASE)
+    try:
+        assets = json.loads((FRONTEND_BUILD_DIR / "asset-manifest.json").read_text(encoding="utf-8")).get("files", {})
+    except (OSError, ValueError):
+        assets = {}
+    preload = ''.join(
+        f'<link rel="preload" as="script" href="{escape(url, quote=True)}">'
+        for name, url in assets.items()
+        if (name == "home.js" or re.fullmatch(r'static/js/home\.[a-z0-9]+\.chunk\.js', str(name)))
+        and re.fullmatch(r'/static/js/home\.[a-z0-9]+\.chunk\.js', str(url))
+    )
+    critical_css = (
+        '<style id="home-critical-style">'
+        'html,body{margin:0;font-family:Manrope,Arial,sans-serif}'
+        '.home-hero{position:relative;min-height:100vh;display:flex;align-items:center;overflow:hidden;background:#0a0906;color:#fff;line-height:1.5}'
+        '.home-hero-content{position:relative;width:100%;max-width:1280px;margin:0 auto;padding:112px 16px 0;box-sizing:border-box}'
+        '.home-hero h1{margin:12px 0 0;max-width:896px;font-size:36px;line-height:1.05;font-weight:700;letter-spacing:-.01em}'
+        '.home-hero-tagline{margin-top:16px;max-width:768px;font-size:24px;line-height:1.25;font-weight:600;letter-spacing:-.01em}'
+        '.home-hero-description{margin-top:20px;max-width:576px;font-size:16px;line-height:1.625;color:rgb(255 255 255/.85)}'
+        '.home-hero p{margin:0}.home-hero p+p{margin-top:8px}'
+        '.home-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}'
+        '.home-hero-actions>a{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 24px;border-radius:9999px;background:#c2410c;color:#fff;font-size:16px;font-weight:500;text-decoration:none}'
+        '.home-hero-actions>a+a{border:1px solid rgb(255 255 255/.4);background:rgb(255 255 255/.1)}'
+        '.server-home-header{position:absolute;top:0;left:0;right:0;z-index:1;display:flex;align-items:center;justify-content:space-between;height:64px;padding:0 16px;box-sizing:border-box;background:rgb(0 0 0/.25)}'
+        '.server-home-header img{width:165px;height:28px;object-fit:contain}.server-home-header>a:last-child{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;border:1px solid rgb(255 255 255/.2);color:#fff;background:rgb(255 255 255/.1)}'
+        '@supports(content-visibility:auto){.server-home-copy{content-visibility:auto;contain-intrinsic-size:auto 5000px}}'
+        '@media(min-width:640px){.home-hero-content{padding-left:24px;padding-right:24px}.home-hero h1{margin-top:16px;font-size:60px}.home-hero-tagline{font-size:30px}.home-hero-description{font-size:18px}}'
+        '@media(min-width:1024px){.home-hero-content{padding:128px 32px 0}.home-hero h1{font-size:72px}.server-home-header{height:100px}}'
+        '</style>'
+    )
+    return html.replace('</head>', critical_css + preload + '</head>')
 
 
 def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
     # The admin interface is client-rendered and has no public SEO content.
     if path == "/admin" or path.startswith("/admin/"):
         return ""
+    if path == "/":
+        return _home_first_screen()
     heading = escape(_strip_html(seo.get("heading") or seo.get("title") or DEFAULT_TITLE))
+    is_landing = path in _landing_pages()
     parts = [
         '<div data-seo-prerender="true" style="max-width:1180px;margin:0 auto;padding:24px;font-family:Arial,sans-serif">',
         _global_navigation(),
         f"<main><h1>{heading}</h1>",
-        _render_rich_paragraphs(seo.get("intro") or seo.get("description"), limit=1),
     ]
+    if not is_landing:
+        parts.append(
+            _render_rich_paragraphs(
+                seo.get("intro") or seo.get("description"), limit=1
+            )
+        )
     if path == "/":
         home = home_page_content(_settings())
         parts.append(_render_rich_paragraphs(home["hero_tagline"]))
@@ -1698,7 +1854,10 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
     elif path == "/tours":
         parts.append("<h2>Актуальные туры</h2>")
         parts.append(_tour_list(tour for tour in list_items("tours") if is_listed_tour(tour)))
-    elif path in _landing_pages():
+    elif is_landing:
+        cover = _render_seo_hub_cover(seo)
+        if cover:
+            parts.append(cover)
         intro = _render_rich_paragraphs(seo.get("intro"))
         if intro:
             parts.append(intro)
@@ -1707,12 +1866,14 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         )
         parts.append(f"<h2>{escape(catalog_title)}</h2>")
         parts.append(_tour_list(tours_for_landing(path)))
+        video = _render_seo_hub_video(seo)
+        if video:
+            parts.append(video)
         content = _render_seo_hub_content(seo)
         if content:
             parts.append(content)
         how_to_title = _strip_html(seo.get("how_to_title")) or "Как выбрать тур"
         parts.append(f"<h2>{escape(how_to_title)}</h2><p>Сравните даты, длительность, программу и включённые услуги. Менеджер TRAVELSPACE поможет подобрать подходящую поездку и ответит на вопросы.</p>")
-        parts.append(_render_other_seo_hubs(path))
         faq = _render_seo_hub_faq(seo)
         if faq:
             parts.append(faq)
@@ -1770,7 +1931,7 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         if faq:
             parts.append(f"<h2>Часто задаваемые вопросы</h2>{faq}")
     elif path.startswith("/blog/") and seo.get("record"):
-        parts.append(_render_paragraphs(seo["record"].get("content"), limit=40, semantic_headings=True))
+        parts.append(_render_article_body(seo["record"]))
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
     if seo.get("page_faq_items"):
         parts.append(f'<section><h2>{escape(str(seo["page_faq_title"]))}</h2>')
@@ -1790,20 +1951,28 @@ mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
 dates chains hotels use_hotel_chains program highlights what_to_see included excluded
 important_info faq map_embed content excerpt related_tour_slugs related_tours_title videos seo_title seo_description
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
-name text rating date photo question answer show_on_home category valid_until related_tour_slug
+content_blocks gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
 button_text button_url discount value subtitle tour_name
 """.split())
 PUBLIC_SETTINGS_FIELDS = set("""
 company_short company_name address email phone phone_link site_url work_hours header_phones
 contact_phones social_buttons call_directions map_embed_url map_iframe_url map_route_url map_url
 home_page home_benefits seo_pages seo_hubs seo_default_image links_page
+gtm_id google_analytics_id yandex_metrika_id facebook_pixel_id meta_pixel_id tiktok_pixel_id
 """.split())
 CARD_FIELDS = set("""
 id slug title title_highlighted transport_type active hidden hide_from_catalog order tagline
 short_description region_name region_slug direction_name duration departure_city departure_cities departureCities
 price price_from currency additional_price additional_currency price_type badges hero_image
-hero_image_alt hero_mobile hero_mobile_image mobile_hero_image gallery seo_image dates chains
+hero_image_alt hero_mobile hero_mobile_image mobile_hero_image dates chains
 """.split())
+
+HOME_REVIEW_FIELDS = {
+    "id", "name", "text", "rating", "date", "photo", "tour_name", "direction",
+}
+HOME_PROMOTION_FIELDS = {
+    "id", "title", "description", "image", "related_tour_slug", "related_tour_slugs",
+}
 
 
 def _public_record(record: dict | None, fields: set[str] = PUBLIC_RECORD_FIELDS) -> dict | None:
@@ -1817,6 +1986,49 @@ def _script_json(value: Any) -> str:
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
             .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
             .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+
+
+def _gtm_container_id(settings: Any) -> str:
+    """Return a safe public GTM container ID from the editable settings."""
+    if not isinstance(settings, dict):
+        return ""
+    analytics = settings.get("analytics")
+    nested = analytics.get("gtm_id") if isinstance(analytics, dict) else ""
+    value = str(settings.get("gtm_id") or nested or "").strip().upper()
+    return value if re.fullmatch(r"GTM-[A-Z0-9]+", value) else ""
+
+
+def _gtm_head_script(container_id: str) -> str:
+    identifier = json.dumps(container_id)
+    return (
+        '<script data-server-gtm="true">'
+        '(function(w,d,i){w.dataLayer=w.dataLayer||[];'
+        'w.__TRAVELSPACE_GTM_CONFIGURED=true;'
+        'w.__TRAVELSPACE_GTM_ID=i;'
+        'function load(){'
+        'if(w.__TRAVELSPACE_GTM_INITIALIZED)return;'
+        'w.__TRAVELSPACE_GTM_INITIALIZED=true;'
+        "w.dataLayer.push({'gtm.start':new Date().getTime(),event:'gtm.js'});"
+        "var f=d.getElementsByTagName('script')[0],j=d.createElement('script');"
+        "j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+encodeURIComponent(i);"
+        'f.parentNode.insertBefore(j,f);'
+        "w.dispatchEvent(new Event('gtm-ready'));}"
+        'w.__TRAVELSPACE_LOAD_GTM=load;'
+        "['pointerdown','keydown','touchstart','wheel'].forEach(function(name){"
+        "w.addEventListener(name,load,{once:true,passive:true});});"
+        "w.addEventListener('load',function(){w.setTimeout(load,1500);},{once:true});"
+        '})(window,document,' + identifier + ');'
+        '</script>'
+    )
+
+
+def _gtm_noscript(container_id: str) -> str:
+    return (
+        '<noscript data-server-gtm="true"><iframe '
+        f'src="https://www.googletagmanager.com/ns.html?id={escape(container_id, quote=True)}" '
+        'height="0" width="0" style="display:none;visibility:hidden" '
+        'title="Google Tag Manager"></iframe></noscript>'
+    )
 
 
 def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
@@ -1835,10 +2047,89 @@ def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
     for article in list_items("articles"):
         if not is_listed_article(article):
             continue
-        summary = _public_record(article, {"id", "slug", "title", "excerpt", "cover", "images", "seo_image", "seo_description", "gallery", "published_at", "active", "hidden", "order"})
-        summary["excerpt"] = _limit(_first_text(article.get("excerpt"), article.get("content")), 190)
+        if path == "/":
+            # The home page only uses these records in the Blog menu. Avoid
+            # parsing article bodies and shipping gallery data before paint.
+            summary = _public_record(
+                article,
+                {
+                    "id", "slug", "title", "published_at", "active",
+                    "hidden", "hidden_from_list", "hide_from_list", "order",
+                },
+            )
+        else:
+            summary = _public_record(article, {"id", "slug", "title", "excerpt", "cover", "images", "seo_image", "seo_description", "gallery", "published_at", "active", "hidden", "order"})
+            summary["excerpt"] = _limit(_first_text(article.get("excerpt"), article.get("content")), 190)
         articles.append(summary)
     status = get_http_status_for_path(path)
+    # The home screen does not need the full editable SEO-hub payload. It is
+    # several dozen kilobytes of article-like text and is still available from
+    # the settings API for pages that need it.
+    bootstrap_settings = {
+        key: value
+        for key, value in settings.items()
+        if key in PUBLIC_SETTINGS_FIELDS
+        and not (path == "/" and key == "seo_hubs")
+    }
+    if path == "/":
+        # Keep custom direction labels available to the header without
+        # embedding all of their long landing-page copy on the home screen.
+        bootstrap_settings["seo_hubs"] = {
+            str(slug): {
+                key: value
+                for key, value in hub.items()
+                if key in {"custom", "label", "heading", "title", "path"}
+            }
+            for slug, hub in (settings.get("seo_hubs") or {}).items()
+            if isinstance(hub, dict)
+        }
+        # Only the home SEO configuration is read while this document is
+        # mounted. Other public pages receive their complete settings on their
+        # own server-rendered navigation.
+        home_seo = (settings.get("seo_pages") or {}).get("home")
+        bootstrap_settings["seo_pages"] = {"home": home_seo} if isinstance(home_seo, dict) else {}
+
+    if path == "/":
+        # Match the actual home render: four review cards, three promotions,
+        # and only FAQ entries enabled for the home block.
+        reviews = [
+            _public_record(item, HOME_REVIEW_FIELDS)
+            for item in sort_reviews(
+                item
+                for item in list_items("reviews")
+                if item.get("active") is not False
+            )
+        ][:4]
+        promotions = [
+            _public_record(item, HOME_PROMOTION_FIELDS)
+            for item in list_items("promotions")
+            if item.get("active") is not False
+        ][:3]
+        faq = [
+            _public_record(item)
+            for item in list_items("faq")
+            if item.get("active") is not False and item.get("show_on_home") is not False
+        ]
+    else:
+        reviews = [
+            _public_record(item)
+            for item in sort_reviews(
+                item
+                for item in list_items("reviews")
+                if item.get("active") is not False
+            )
+        ]
+        promotions = [
+            _public_record(item)
+            for item in list_items("promotions")
+            if item.get("active") is not False
+        ]
+        faq = [
+            _public_record(item)
+            for item in list_items("faq")
+            if item.get("active") is not False
+        ]
+
     return {
         "version": 1, "path": path, "status": status,
         "record": _public_record(seo.get("record")) if status == 200 else None,
@@ -1851,25 +2142,12 @@ def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
             "type": seo.get("type") or "website", "siteName": SITE_NAME,
             "graph": _structured_graph(path, seo),
         },
-        "site": {"settings": {key: value for key, value in settings.items() if key in PUBLIC_SETTINGS_FIELDS},
+        "site": {"settings": bootstrap_settings,
                  "tours": tours, "articles": articles, "ready": True},
         "collections": {
-            "reviews": [
-                _public_record(item)
-                for item in sort_reviews(
-                    item
-                    for item in list_items("reviews")
-                    if item.get("active") is not False
-                )
-            ],
-            **{
-                name: [
-                    _public_record(item)
-                    for item in list_items(name)
-                    if item.get("active") is not False
-                ]
-                for name in ("promotions", "faq")
-            },
+            "reviews": reviews,
+            "promotions": promotions,
+            "faq": faq,
         },
     }
 
@@ -1883,6 +2161,23 @@ def render_index_html(path: str) -> str:
         html = re.sub(pattern, "", html, flags=re.IGNORECASE | re.DOTALL)
     seo = get_seo_for_path(clean_path)
     html = re.sub(r"<head>", lambda _: "<head>" + _render_meta_block(clean_path, seo), html, count=1, flags=re.IGNORECASE)
+    if not clean_path.startswith(("/admin", "/api")):
+        gtm_id = _gtm_container_id(_settings())
+        if gtm_id:
+            html = re.sub(
+                r"<head>",
+                lambda _: "<head>" + _gtm_head_script(gtm_id),
+                html,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+            html = re.sub(
+                r"<body\b[^>]*>",
+                lambda match: match.group(0) + _gtm_noscript(gtm_id),
+                html,
+                count=1,
+                flags=re.IGNORECASE,
+            )
     snapshot = _render_snapshot(clean_path, seo)
     html = re.sub(
         r'<div\s+id=["\']root["\']\s*>\s*</div>',
@@ -1908,6 +2203,11 @@ def render_index_html(path: str) -> str:
                         '[data-seo-prerender] img{max-width:100%;height:auto}[data-seo-prerender] ul{padding-left:24px;list-style:disc}'
                         '[data-seo-prerender] table{width:100%;border-collapse:collapse}[data-seo-prerender] td,'
                         '[data-seo-prerender] th{border:1px solid #ddd;padding:8px;text-align:left}</style>')
+        if clean_path == "/":
+            # Generic readable fallback styles belong to the lower copy. The
+            # hero uses the same production rules before and after React mounts.
+            fallback_css = fallback_css.replace('[data-seo-prerender]', '.server-home-copy')
+            html = _home_render_assets(html)
         html = html.replace("</head>", fallback_css + "</head>")
     return html
 
