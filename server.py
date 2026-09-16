@@ -370,12 +370,18 @@ def _lead_email_recipient() -> str | None:
 
 def _lead_email_rows(lead: dict) -> list[tuple[str, str]]:
     extra = lead.get("extra") if isinstance(lead.get("extra"), dict) else {}
+    utm = lead.get("utm") if isinstance(lead.get("utm"), dict) else {}
+    click_ids = (
+        lead.get("click_ids") if isinstance(lead.get("click_ids"), dict) else {}
+    )
 
     rows = [
         ("Тип заявки", _lead_form_type_label(lead.get("form_type"))),
         ("Имя", _as_text(lead.get("name")) or "—"),
         ("Телефон", _as_text(lead.get("phone"))),
         ("Тур", _as_text(lead.get("tour")) or "—"),
+        ("Slug тура", _as_text(lead.get("tour_slug")) or "—"),
+        ("Регион / направление", _as_text(lead.get("region")) or "—"),
         ("Дата", _as_text(lead.get("date")) or "—"),
         ("Комментарий", _as_text(lead.get("comment")) or "—"),
     ]
@@ -396,6 +402,38 @@ def _lead_email_rows(lead: dict) -> list[tuple[str, str]]:
 
     rows.extend(
         [
+            ("Страница / место формы", _as_text(lead.get("source_page")) or "—"),
+            ("URL отправки заявки", _as_text(lead.get("page_url")) or "—"),
+            ("Первая страница визита", _as_text(lead.get("landing_page")) or "—"),
+            (
+                "Источник перехода (referrer)",
+                _as_text(lead.get("referrer")) or "Прямой переход / не определён",
+            ),
+            ("UTM source", _as_text(utm.get("utm_source")) or "—"),
+            ("UTM medium", _as_text(utm.get("utm_medium")) or "—"),
+            ("UTM campaign", _as_text(utm.get("utm_campaign")) or "—"),
+            ("UTM term", _as_text(utm.get("utm_term")) or "—"),
+            ("UTM content", _as_text(utm.get("utm_content")) or "—"),
+        ]
+    )
+
+    click_id_labels = {
+        "gclid": "Google Click ID (gclid)",
+        "yclid": "Яндекс Click ID (yclid)",
+        "fbclid": "Meta Click ID (fbclid)",
+        "ttclid": "TikTok Click ID (ttclid)",
+        "fbp": "Meta Browser ID (fbp)",
+        "fbc": "Meta Click Cookie (fbc)",
+    }
+    for key, label in click_id_labels.items():
+        if _as_text(click_ids.get(key)):
+            rows.append((label, _as_text(click_ids.get(key))))
+
+    rows.extend(
+        [
+            ("ID события аналитики", _as_text(lead.get("event_id")) or "—"),
+            ("IP", _as_text(lead.get("ip")) or "—"),
+            ("Устройство / браузер", _as_text(lead.get("user_agent")) or "—"),
             ("ID заявки", _as_text(lead.get("id"))),
             ("Создана", _as_text(lead.get("created_at"))),
         ]

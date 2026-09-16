@@ -1259,6 +1259,41 @@ def _render_related_tours(tour: dict[str, Any]) -> str:
     return "<ul>" + "".join(rendered) + "</ul>" if rendered else ""
 
 
+_TOUR_ANCHOR_TRANSLITERATION = str.maketrans(
+    {
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e",
+        "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k",
+        "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r",
+        "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "ts",
+        "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "",
+        "э": "e", "ю": "yu", "я": "ya",
+    }
+)
+
+
+def _clean_tour_anchor(value: Any) -> str:
+    source = str(value or "").strip().lower()
+    if "#" in source:
+        source = source.rsplit("#", 1)[-1]
+    source = source.translate(_TOUR_ANCHOR_TRANSLITERATION)
+    source = re.sub(r"[^a-z0-9]+", "-", source).strip("-")
+    return source[:80]
+
+
+def _tour_anchor_markers(
+    tour: dict[str, Any], key: str, default_anchor: str = ""
+) -> str:
+    anchors = tour.get("section_anchors")
+    anchors = anchors if isinstance(anchors, dict) else {}
+    custom = _clean_tour_anchor(anchors.get(key))
+    default_value = _clean_tour_anchor(default_anchor)
+    values = list(dict.fromkeys(item for item in (default_value, custom) if item))
+    return "".join(
+        f'<span id="{escape(anchor, quote=True)}" data-tour-anchor="true"></span>'
+        for anchor in values
+    )
+
+
 def _render_tour_program(program: Any) -> str:
     if not isinstance(program, list):
         return ""
@@ -1269,7 +1304,9 @@ def _render_tour_program(program: Any) -> str:
         day_number = _strip_html(day.get("day") or index + 1)
         day_title = _strip_html(day.get("title"))
         heading = f"День {day_number}" + (f" — {day_title}" if day_title else "")
-        result.append(f"<section><h3>{escape(heading)}</h3>")
+        anchor = _clean_tour_anchor(day.get("anchor"))
+        anchor_attr = f' id="{escape(anchor, quote=True)}"' if anchor else ""
+        result.append(f"<section{anchor_attr}><h3>{escape(heading)}</h3>")
         result.append(_render_paragraphs(day.get("description"), limit=None))
         result.append(_render_paragraphs(day.get("notes"), limit=None))
         result.append("</section>")
@@ -1331,7 +1368,31 @@ def _render_tour_dates_and_prices(tour: dict[str, Any]) -> str:
         if item.get("comment"):
             label += " — " + str(item["comment"])
         if label:
-            date_items.append(f"<li>{escape(label)}</li>")
+            special_active = (
+                item.get("special_active") is True
+                or item.get("specialActive") is True
+            )
+            special_label = _strip_html(
+                item.get("special_label") or item.get("specialLabel")
+            )[:80]
+            special_slug = _strip_html(
+                item.get("special_tour_slug") or item.get("specialTourSlug")
+            ).strip().strip("/")
+            special_cta = _strip_html(
+                item.get("special_cta_label") or item.get("specialCtaLabel")
+            )[:80]
+            rendered = escape(label)
+            if special_active:
+                rendered = (
+                    f"<strong>{escape(special_label or 'Особая дата')}</strong> — "
+                    + rendered
+                )
+                if re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", special_slug):
+                    rendered += " — " + _link(
+                        f"/tours/{special_slug}",
+                        special_cta or "Смотреть специальную программу",
+                    )
+            date_items.append(f"<li>{rendered}</li>")
     if date_items:
         result.append("<ul>" + "".join(date_items) + "</ul>")
     return "".join(result)
@@ -1892,44 +1953,88 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             tour.get("description") or tour.get("short_description"), limit=None
         )
         if description:
-            parts.append(f"<h2>О туре</h2>{description}")
+            parts.append(
+                _tour_anchor_markers(tour, "about", "about-tour")
+                + f"<h2>О туре</h2>{description}"
+            )
         gallery = _render_tour_gallery(tour)
         if gallery:
-            parts.append(f"<h2>Фотографии тура</h2>{gallery}")
+            parts.append(
+                _tour_anchor_markers(tour, "gallery", "gallery")
+                + f"<h2>Фотографии тура</h2>{gallery}"
+            )
         for label, key in (
             ("Главные впечатления тура", "highlights"),
             ("Что посмотреть", "what_to_see"),
         ):
             content = _render_list(tour.get(key))
             if content:
-                parts.append(f"<h2>{label}</h2>{content}")
+                parts.append(
+                    _tour_anchor_markers(
+                        tour,
+                        key,
+                        "highlights" if key == "highlights" else "",
+                    )
+                    + f"<h2>{label}</h2>{content}"
+                )
         program = _render_tour_program(tour.get("program"))
         if program:
-            parts.append(f"<h2>Программа тура</h2>{program}")
+            parts.append(
+                _tour_anchor_markers(tour, "program", "program")
+                + f"<h2>Программа тура</h2>{program}"
+            )
+        price_marker_rendered = False
         for label, key in (
             ("В стоимость включено", "included"),
             ("В стоимость не включено", "excluded"),
-            ("Важная информация", "important_info"),
         ):
             content = _render_list(tour.get(key))
             if content:
-                parts.append(f"<h2>{label}</h2>{content}")
+                marker = ""
+                if not price_marker_rendered:
+                    marker = _tour_anchor_markers(tour, "price", "price")
+                    price_marker_rendered = True
+                parts.append(marker + f"<h2>{label}</h2>{content}")
+        important = _render_list(tour.get("important_info"))
+        if important:
+            parts.append(
+                _tour_anchor_markers(tour, "important")
+                + f"<h2>Важная информация</h2>{important}"
+            )
         videos = _render_tour_videos(tour)
         if videos:
-            parts.append(f"<h2>Видео о туре</h2>{videos}")
+            parts.append(
+                _tour_anchor_markers(tour, "videos")
+                + f"<h2>Видео о туре</h2>{videos}"
+            )
         dates_and_prices = _render_tour_dates_and_prices(tour)
         if dates_and_prices:
-            parts.append(f"<h2>Даты и стоимость</h2>{dates_and_prices}")
+            parts.append(
+                _tour_anchor_markers(tour, "dates", "dates-prices")
+                + f"<h2>Даты и стоимость</h2>{dates_and_prices}"
+            )
+        has_hotels = any(
+            isinstance(chain, dict) and isinstance(chain.get("hotels"), list) and chain["hotels"]
+            for chain in (tour.get("chains") if isinstance(tour.get("chains"), list) else [])
+        )
+        if has_hotels:
+            parts.append(_tour_anchor_markers(tour, "hotels"))
         related = _render_related_tours(tour)
         if related:
             related_title = (
                 _strip_html(tour.get("related_tours_title"))
                 or "Туры, которые вас также могут заинтересовать"
             )
-            parts.append(f"<h2>{escape(related_title)}</h2>{related}")
+            parts.append(
+                _tour_anchor_markers(tour, "related")
+                + f"<h2>{escape(related_title)}</h2>{related}"
+            )
         faq = _render_tour_faq(tour.get("faq"))
         if faq:
-            parts.append(f"<h2>Часто задаваемые вопросы</h2>{faq}")
+            parts.append(
+                _tour_anchor_markers(tour, "faq", "faq")
+                + f"<h2>Часто задаваемые вопросы</h2>{faq}"
+            )
     elif path.startswith("/blog/") and seo.get("record"):
         parts.append(_render_article_body(seo["record"]))
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
@@ -1949,7 +2054,7 @@ departure_city departure_cities departureCities price price_from currency additi
 additional_currency price_type badges hero_image hero_image_alt hero_mobile hero_mobile_image
 mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
 dates chains hotels use_hotel_chains program highlights what_to_see included excluded
-important_info faq map_embed content excerpt related_tour_slugs related_tours_title videos seo_title seo_description
+important_info section_anchors faq map_embed content excerpt related_tour_slugs related_tours_title videos seo_title seo_description
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
 content_blocks gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
 button_text button_url discount value subtitle tour_name

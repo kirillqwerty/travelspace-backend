@@ -67,6 +67,37 @@ def test_full_record_and_readable_content_exist_without_javascript(render):
     assert 'id="server-page-style"' in document
 
 
+def test_tour_advertising_anchors_are_preserved_in_bootstrap_and_snapshot(
+    render, monkeypatch
+):
+    monkeypatch.setitem(
+        TOURS[0],
+        "section_anchors",
+        {"program": "route-plan", "dates": "sale-dates"},
+    )
+    monkeypatch.setitem(
+        TOURS[0],
+        "program",
+        [
+            {**day, "anchor": "first-day" if index == 0 else ""}
+            for index, day in enumerate(TOURS[0]["program"])
+        ],
+    )
+
+    document = render("/tours/public-tour")
+    data = bootstrap(document)
+
+    assert data["record"]["section_anchors"] == {
+        "program": "route-plan",
+        "dates": "sale-dates",
+    }
+    assert data["record"]["program"][0]["anchor"] == "first-day"
+    assert 'id="program"' in document
+    assert 'id="route-plan"' in document
+    assert 'id="sale-dates"' in document
+    assert '<section id="first-day">' in document
+
+
 def test_bootstrap_excludes_private_fields_and_unlisted_cards(render, monkeypatch):
     monkeypatch.setitem(TOURS[0], "internal_notes", "private tour notes")
     monkeypatch.setitem(SETTINGS, "telegram_bot_token", "private bot token")

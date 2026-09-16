@@ -23,5 +23,31 @@ def test_date_comments_survive_in_server_snapshot(monkeypatch):
     assert "Рождественская программа" in seo_runtime._render_snapshot("/tours/public-tour", seo)
 
 
+def test_special_date_label_and_program_link_survive_in_server_snapshot(monkeypatch):
+    configure_storage(monkeypatch)
+    monkeypatch.setitem(
+        TOURS[0],
+        "dates",
+        [
+            {
+                "start": "2027-04-12",
+                "end": "2027-04-16",
+                "price": 650,
+                "special_active": True,
+                "special_label": "Фестиваль тюльпанов",
+                "special_tour_slug": "spring-festival",
+                "special_cta_label": "Открыть программу",
+            }
+        ],
+    )
+
+    seo = seo_runtime.get_seo_for_path("/tours/public-tour")
+    snapshot = seo_runtime._render_snapshot("/tours/public-tour", seo)
+
+    assert "Фестиваль тюльпанов" in snapshot
+    assert "Открыть программу" in snapshot
+    assert 'href="https://travelspace.by/tours/spring-festival"' in snapshot
+
+
 def test_social_hub_settings_are_allowed_in_bootstrap():
     assert "links_page" in seo_runtime.PUBLIC_SETTINGS_FIELDS
