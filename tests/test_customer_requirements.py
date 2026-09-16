@@ -51,3 +51,23 @@ def test_special_date_label_and_program_link_survive_in_server_snapshot(monkeypa
 
 def test_social_hub_settings_are_allowed_in_bootstrap():
     assert "links_page" in seo_runtime.PUBLIC_SETTINGS_FIELDS
+
+
+def test_tour_youtube_block_is_in_snapshot_and_bootstrap(monkeypatch):
+    configure_storage(monkeypatch)
+    monkeypatch.setitem(TOURS[0], "dates", [{"start": "2027-12-25", "end": "2027-12-29", "price": 500}])
+    monkeypatch.setitem(TOURS[0], "important_info", ["Возьмите паспорт"])
+    monkeypatch.setitem(TOURS[0], "youtube_url", '<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>')
+    monkeypatch.setitem(TOURS[0], "youtube_title", "Путешествие в кадре")
+    seo = seo_runtime.get_seo_for_path("/tours/public-tour")
+    snapshot = seo_runtime._render_snapshot("/tours/public-tour", seo)
+    assert 'data-tour-youtube="true"' in snapshot
+    assert snapshot.index("Даты и стоимость") < snapshot.index('data-tour-youtube="true"') < snapshot.index("Важная информация")
+    assert "Путешествие в кадре" in snapshot
+    assert 'href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"' in snapshot
+    assert "<iframe" not in snapshot
+    assert {"youtube_url", "youtube_title"} <= seo_runtime.PUBLIC_RECORD_FIELDS
+    monkeypatch.setitem(TOURS[0], "youtube_url", "")
+    assert 'data-tour-youtube="true"' not in seo_runtime._render_snapshot("/tours/public-tour", seo)
+    monkeypatch.setitem(TOURS[0], "youtube_url", "https://example.com/watch?v=dQw4w9WgXcQ")
+    assert 'data-tour-youtube="true"' not in seo_runtime._render_snapshot("/tours/public-tour", seo)

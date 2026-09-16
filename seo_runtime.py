@@ -1813,15 +1813,17 @@ def _youtube_video_id(value: Any) -> str:
     source = source.replace("&amp;", "&")
     if re.fullmatch(r"[A-Za-z0-9_-]{11}", source):
         return source
-    for pattern in (
-        r"(?:youtube(?:-nocookie)?\.com)/(?:embed|shorts|live)/([A-Za-z0-9_-]{11})",
-        r"youtu\.be/([A-Za-z0-9_-]{11})",
-        r"[?&]v=([A-Za-z0-9_-]{11})(?:[&#]|$)",
-    ):
-        match = re.search(pattern, source, flags=re.IGNORECASE)
-        if match:
-            return match.group(1)
-    return ""
+    parsed = urlparse(source)
+    hostname = str(parsed.hostname or "").lower()
+    candidate = ""
+    if hostname == "youtu.be":
+        candidate = parsed.path.strip("/").split("/", 1)[0]
+    elif hostname in {"youtube.com", "youtube-nocookie.com"} or hostname.endswith((".youtube.com", ".youtube-nocookie.com")):
+        query_id = re.search(r"(?:^|&)v=([^&]*)", parsed.query)
+        path_id = re.match(r"^/(?:embed|shorts|live)/([^/?#]+)", parsed.path)
+        candidate = query_id.group(1) if query_id else path_id.group(1) if path_id else ""
+    return candidate if re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate) else ""
+
 
 
 def _render_seo_hub_video(seo: dict[str, Any]) -> str:
@@ -1995,16 +1997,11 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
                     marker = _tour_anchor_markers(tour, "price", "price")
                     price_marker_rendered = True
                 parts.append(marker + f"<h2>{label}</h2>{content}")
-        important = _render_list(tour.get("important_info"))
-        if important:
-            parts.append(
-                _tour_anchor_markers(tour, "important")
-                + f"<h2>Важная информация</h2>{important}"
-            )
+        youtube_id = _youtube_video_id(tour.get("youtube_url"))
         videos = _render_tour_videos(tour)
         if videos:
             parts.append(
-                _tour_anchor_markers(tour, "videos")
+                ("" if youtube_id else _tour_anchor_markers(tour, "videos"))
                 + f"<h2>Видео о туре</h2>{videos}"
             )
         dates_and_prices = _render_tour_dates_and_prices(tour)
@@ -2019,6 +2016,21 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         )
         if has_hotels:
             parts.append(_tour_anchor_markers(tour, "hotels"))
+        if youtube_id:
+            youtube_title = _strip_html(tour.get("youtube_title")) or "Видео о туре"
+            parts.append(
+                _tour_anchor_markers(tour, "videos")
+                + '<section data-tour-youtube="true">'
+                + f"<h2>{escape(youtube_title)}</h2>"
+                + f'<p><a href="https://www.youtube.com/watch?v={youtube_id}">'
+                + "Посмотреть видео на YouTube</a></p></section>"
+            )
+        important = _render_list(tour.get("important_info"))
+        if important:
+            parts.append(
+                _tour_anchor_markers(tour, "important")
+                + f"<h2>Важная информация</h2>{important}"
+            )
         related = _render_related_tours(tour)
         if related:
             related_title = (
@@ -2054,7 +2066,7 @@ departure_city departure_cities departureCities price price_from currency additi
 additional_currency price_type badges hero_image hero_image_alt hero_mobile hero_mobile_image
 mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
 dates chains hotels use_hotel_chains program highlights what_to_see included excluded
-important_info section_anchors faq map_embed content excerpt related_tour_slugs related_tours_title videos seo_title seo_description
+important_info section_anchors faq map_embed content excerpt related_tour_slugs related_tours_title videos youtube_title youtube_url seo_title seo_description
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
 content_blocks gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
 button_text button_url discount value subtitle tour_name
@@ -2304,7 +2316,7 @@ def render_index_html(path: str) -> str:
                         '[data-seo-prerender] h1{font-size:clamp(26px,4vw,44px);font-weight:800;margin:24px 0 16px}'
                         '[data-seo-prerender] h2{font-size:24px;font-weight:700;margin:24px 0 12px}'
                         '[data-seo-prerender] h3{font-size:19px;font-weight:700;margin:16px 0 8px}'
-                        '[data-seo-prerender] p{margin:10px 0}[data-seo-prerender] a{color:#C2410C;text-decoration:underline}'
+                        '[data-seo-prerender] p{margin:10px 0}[data-seo-prerender] a{color:#C2410C;text-decoration:none}'
                         '[data-seo-prerender] img{max-width:100%;height:auto}[data-seo-prerender] ul{padding-left:24px;list-style:disc}'
                         '[data-seo-prerender] table{width:100%;border-collapse:collapse}[data-seo-prerender] td,'
                         '[data-seo-prerender] th{border:1px solid #ddd;padding:8px;text-align:left}</style>')
