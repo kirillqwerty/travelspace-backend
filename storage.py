@@ -84,6 +84,20 @@ def list_items(name: str) -> list[dict]:
     return data if isinstance(data, list) else []
 
 
+def mutate_items(name: str, mutation):
+    """Read, validate and replace one collection under the same writer lock."""
+    p = _path(name)
+    with _lock_for(name):
+        items = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+        before = json.dumps(items, sort_keys=True, default=str)
+        result = mutation(items)
+        if json.dumps(items, sort_keys=True, default=str) != before:
+            tmp = p.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            os.replace(tmp, p)
+        return result
+
+
 def get_by(name: str, key: str, value: Any) -> dict | None:
     for item in list_items(name):
         if item.get(key) == value:

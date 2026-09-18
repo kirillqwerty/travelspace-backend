@@ -11,6 +11,7 @@ FastAPI serves the React build and injects runtime SEO meta for page URLs.
 from __future__ import annotations
 
 from article_content import sync_article_text
+from hotels import decorate_tour, edit_hotel, ensure_hotel_ids, hotel_records, tour_hotels_revision, validate_tour_hotels
 
 import asyncio
 import logging
@@ -104,6 +105,7 @@ from storage import (
     load,
     save,
     update_item,
+    mutate_items,
 )
 from tracking import send_server_conversion_events
 from tour_program_pdf import build_tour_program_pdf
@@ -1077,7 +1079,7 @@ async def get_tours(region: str | None = None, badge: str | None = None):
         items = [t for t in items if badge in (t.get("badges") or [])]
 
     items.sort(key=_order_value)
-    return items
+    return [decorate_tour(item) for item in items]
 
 
 @api.get("/tours/{slug}")
@@ -1088,7 +1090,15 @@ async def get_tour(slug: str):
     if not is_public_tour(tour):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
-    return tour
+    return decorate_tour(tour)
+
+
+@api.get("/hotels/{slug}")
+async def get_hotel(slug: str):
+    hotel = next((h for h in hotel_records(_prune_all_tour_departure_dates(), public=True) if h["slug"] == slug), None)
+    if not hotel:
+        raise HTTPException(404, "Отель не найден")
+    return hotel
 
 
 @api.get("/tours/{slug}/program.pdf")
@@ -1423,9 +1433,16 @@ def _duplicate_tour(item_id: str) -> dict:
     item["created_at"] = _now()
     item["updated_at"] = _now()
     item["seo_lastmod"] = ""
+    item.pop("_hotels_revision", None)
+    # A copied tour owns independent hotel pages, even when it has the same rooms.
+    for group in [item, *(item.get("chains") or [])]:
+        for hotel in group.get("hotels") or []:
+            hotel["id"] = str(uuid.uuid4())
+            hotel.pop("hotel_slug", None)
+            hotel.pop("hotel_page_slug", None)
 
     add_item("tours", item)
-    return item
+    return decorate_tour(item, admin=True)
 
 
 CONTENT_COLLECTIONS = {"tours", "articles"}
@@ -1514,7 +1531,10 @@ def _backfill_home_content_timestamp() -> None:
 
 
 def _crud_create(name: str, payload: dict) -> dict:
+    if name == "hotels":
+        return mutate_items("tours", lambda tours: edit_hotel(tours, payload, timestamp=_now()))
     item = {**payload, "id": str(uuid.uuid4())}
+    item.pop("_hotels_revision", None)
     _normalize_content_seo(name, item)
 
     if "active" not in item:
@@ -1522,6 +1542,7 @@ def _crud_create(name: str, payload: dict) -> dict:
 
     if name == "tours":
         _prune_tour_departure_dates(item)
+        validate_tour_hotels(list_items("tours"), item)
 
     if name in CONTENT_COLLECTIONS:
         now = _now()
@@ -1531,10 +1552,34 @@ def _crud_create(name: str, payload: dict) -> dict:
     add_item(name, item)
     if name == "faq" and is_home_faq(item):
         _touch_home_content_timestamp()
-    return item
+    return decorate_tour(item, admin=True) if name == "tours" else item
 
 
 def _crud_update(name: str, item_id: str, payload: dict) -> dict:
+    if name == "hotels":
+        return mutate_items("tours", lambda tours: edit_hotel(tours, payload, item_id, timestamp=_now()))
+    if name == "tours":
+        def update_tour(tours):
+            existing = next((t for t in tours if t.get("id") == item_id), None)
+            if existing is None:
+                raise HTTPException(404, "Тур не найден")
+            ensure_hotel_ids(existing)
+            patch = deepcopy(payload)
+            token = patch.pop("_hotels_revision", None)
+            if token is not None and token != tour_hotels_revision(existing):
+                raise HTTPException(409, "Отели или даты тура уже изменены в другой вкладке. Откройте тур заново перед сохранением.")
+            patch.pop("id", None)
+            patch.pop("created_at", None)
+            _normalize_content_seo(name, patch, existing)
+            updated = {**existing, **patch}
+            _prune_tour_departure_dates(updated)
+            validate_tour_hotels(tours, updated)
+            if _content_changed(existing, updated):
+                updated["updated_at"] = _now()
+            existing.clear()
+            existing.update(updated)
+            return decorate_tour(existing, admin=True)
+        return mutate_items("tours", update_tour)
     payload = {**payload}
     existing = get_by(name, "id", item_id)
     _normalize_content_seo(name, payload, existing)
@@ -1561,6 +1606,8 @@ def _crud_update(name: str, item_id: str, payload: dict) -> dict:
 
 
 def _crud_delete(name: str, item_id: str) -> dict:
+    if name == "hotels":
+        return mutate_items("tours", lambda tours: edit_hotel(tours, {}, item_id, delete=True, timestamp=_now()))
     existing = get_by(name, "id", item_id)
     ok = delete_item(name, item_id)
 
@@ -1580,6 +1627,7 @@ def _crud_delete(name: str, item_id: str) -> dict:
 
 COLLECTIONS = [
     "tours",
+    "hotels",
     "reviews",
     "articles",
     "faq",
@@ -1646,7 +1694,9 @@ async def admin_list(collection: str, current=Depends(get_current_admin)):
         raise HTTPException(status_code=404, detail="Unknown collection")
 
     if collection == "tours":
-        return _prune_all_tour_departure_dates()
+        return [decorate_tour(tour, admin=True) for tour in _prune_all_tour_departure_dates()]
+    if collection == "hotels":
+        return hotel_records(_prune_all_tour_departure_dates())
 
     return list_items(collection)
 

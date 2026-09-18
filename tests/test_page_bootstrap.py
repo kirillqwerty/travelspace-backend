@@ -206,12 +206,16 @@ def test_home_styles_and_route_chunk_are_available_in_initial_document(render, m
     assert '<link rel="preload" as="script" href="/static/js/home.123abc.chunk.js">' in home
     assert 'admin.123abc' not in home
     assert 'class="home-hero"' in home
+    assert 'class="home-hero-backdrop"' in home
+    assert 'href="/mobile-hero-sunset-v2.webp" as="image" type="image/webp" media="(max-width: 767px)"' in home
+    assert 'background-image:var(--mobile-home-image)' in home
     assert home.count('<h1>') == 1
     assert 'id="avtobusnie-tury"' in home
     assert '<link href="/static/css/main.test.css" rel="stylesheet">' not in home
     other_page = render('/reviews')
     assert '<link href="/static/css/main.test.css" rel="stylesheet">' in other_page
     assert 'home-critical-style' not in other_page
+    assert 'mobile-hero-sunset-v2.webp' not in other_page
 
 
 def test_missing_build_stylesheet_keeps_original_link(render):

@@ -7,6 +7,7 @@ public URL. React replaces the snapshot after it starts in the browser.
 from __future__ import annotations
 
 from article_content import article_blocks
+from hotels import decorate_tour, hotel_records
 
 import json
 import os
@@ -851,6 +852,8 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
     tour = get_by("tours", "slug", slug)
     if not is_public_tour(tour):
         return _not_found("Тур")
+    if tour.get("hotels") or any(chain.get("hotels") for chain in tour.get("chains") or []):
+        tour = decorate_tour(tour)
     description = _first_text(
         tour.get("seo_description"), tour.get("short_description"), tour.get("tagline"),
         tour.get("description"), f"{tour.get('title', 'Тур')}: программа, даты и стоимость поездки."
@@ -876,6 +879,23 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
         "type": "article",
         "structured_data": structured,
         "record": tour,
+    }
+
+
+def _hotel_seo(slug: str, path: str) -> dict[str, Any]:
+    hotel = next((h for h in hotel_records(list_items("tours"), public=True) if h["slug"] == slug), None)
+    if not hotel:
+        return {**_not_found(), "heading": "Отель не найден", "title": "Отель не найден | TRAVELSPACE"}
+    description = _first_text(hotel.get("seo_description"), hotel.get("short_description"), hotel.get("description"), f'{hotel["name"]}: номера, питание и расположение.')
+    image = hotel.get("seo_image") or hotel.get("image") or next(iter(hotel.get("images") or []), DEFAULT_IMAGE)
+    canonical = _record_canonical(hotel, path)
+    return {
+        "title": hotel.get("seo_title") or f'{hotel["name"]} | TRAVELSPACE',
+        "heading": hotel["name"], "description": description, "image": image,
+        "canonical_url": canonical, "no_index": hotel.get("seo_noindex", False),
+        "no_follow": hotel.get("seo_nofollow", False), "type": "website", "record": hotel,
+        "structured_data": {"@type": "Hotel", "name": hotel["name"], "description": _limit(description, 220),
+                            "url": canonical, "image": _absolute_url(image), "address": hotel.get("address") or hotel.get("location") or None},
     }
 
 
@@ -938,6 +958,9 @@ def get_http_status_for_path(path: str) -> int:
     if path.startswith("/blog/"):
         slug = path.removeprefix("/blog/")
         return 200 if "/" not in slug and is_public_article(get_by("articles", "slug", slug)) else 404
+    if path.startswith("/hotels/"):
+        slug = path.removeprefix("/hotels/")
+        return 200 if any(h["slug"] == slug for h in hotel_records(list_items("tours"), public=True)) else 404
     return 404
 
 
@@ -961,6 +984,8 @@ def get_seo_for_path(path: str) -> dict[str, Any]:
         return _tour_seo(path.removeprefix("/tours/").split("/", 1)[0], path)
     if path.startswith("/blog/"):
         return _article_seo(path.removeprefix("/blog/").split("/", 1)[0], path)
+    if path.startswith("/hotels/"):
+        return _hotel_seo(path.removeprefix("/hotels/"), path)
     if path in STATIC_PAGE_FALLBACKS:
         return _static_seo(path)
     return _not_found()
@@ -981,6 +1006,9 @@ def _breadcrumb_items(path: str, seo: dict[str, Any]) -> list[dict[str, Any]]:
             items.append({"@type": "ListItem", "position": 2, "name": "Туры", "item": _page_url("/tours")})
         elif path.startswith("/blog/"):
             items.append({"@type": "ListItem", "position": 2, "name": "Блог", "item": _page_url("/blog")})
+        elif path.startswith("/hotels/") and seo.get("record"):
+            hotel = seo["record"]
+            items.append({"@type": "ListItem", "position": 2, "name": hotel["tour_title"], "item": _page_url("/tours/" + hotel["tour_slug"])})
         items.append({
             "@type": "ListItem",
             "position": len(items) + 1,
@@ -1770,7 +1798,9 @@ def _home_first_screen() -> str:
         '<header class="server-home-header">'
         f'<a href="/" aria-label="TRAVELSPACE — главная">{brand}</a>'
         '<a href="#server-navigation" aria-label="Меню"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></a>'
-        '</header><main><section class="home-hero"><div class="home-hero-content">'
+        '</header><main><section class="home-hero">'
+        '<div class="home-hero-backdrop" style="--mobile-home-image:url(/mobile-hero-sunset-v2.webp)" aria-hidden="true"></div>'
+        '<div class="home-hero-shade" aria-hidden="true"></div><div class="home-hero-content">'
         f'<h1>{escape(home["h1"])}</h1>'
         + (f'<div class="home-hero-tagline">{_render_rich_paragraphs(home["hero_tagline"])}</div>' if home.get("hero_tagline") else "")
         + (f'<div class="home-hero-description">{_render_rich_paragraphs(home["hero_description"])}</div>' if home.get("hero_description") else "")
@@ -1872,6 +1902,9 @@ def _home_render_assets(html: str) -> str:
         '<style id="home-critical-style">'
         'html,body{margin:0;font-family:Manrope,Arial,sans-serif}'
         '.home-hero{position:relative;min-height:100vh;display:flex;align-items:center;overflow:hidden;background:#0a0906;color:#fff;line-height:1.5}'
+        '.home-hero-backdrop{position:absolute;inset:0;background-color:#0a0a0a}'
+        '.home-hero-shade{position:absolute;inset:0;background:linear-gradient(to bottom,rgb(0 0 0/.35),rgb(0 0 0/.30),rgb(0 0 0/.70)),rgb(67 20 7/.05)}'
+        '@media(max-width:767px){.home-hero-backdrop{background-image:var(--mobile-home-image);background-size:cover;background-position:center;background-repeat:no-repeat}}'
         '.home-hero-content{position:relative;width:100%;max-width:1280px;margin:0 auto;padding:112px 16px 0;box-sizing:border-box}'
         '.home-hero h1{margin:12px 0 0;max-width:896px;font-size:36px;line-height:1.05;font-weight:700;letter-spacing:-.01em}'
         '.home-hero-tagline{margin-top:16px;max-width:768px;font-size:24px;line-height:1.25;font-weight:600;letter-spacing:-.01em}'
@@ -1880,6 +1913,8 @@ def _home_render_assets(html: str) -> str:
         '.home-hero-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:32px}'
         '.home-hero-actions>a{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 24px;border-radius:9999px;background:#c2410c;color:#fff;font-size:16px;font-weight:500;text-decoration:none}'
         '.home-hero-actions>a+a{border:1px solid rgb(255 255 255/.4);background:rgb(255 255 255/.1)}'
+        '@media(max-width:1023px){.home-hero{min-height:100svh}.home-hero-content{padding-top:96px;padding-bottom:calc(88px + env(safe-area-inset-bottom,0px))}}'
+        '@media(max-width:639px) and (max-height:700px){.home-hero h1{font-size:30px}.home-hero-tagline{margin-top:12px;font-size:20px}.home-hero-description{margin-top:16px;font-size:14px;line-height:1.55}.home-hero-actions{margin-top:24px;gap:10px}}'
         '.server-home-header{position:absolute;top:0;left:0;right:0;z-index:1;display:flex;align-items:center;justify-content:space-between;height:64px;padding:0 16px;box-sizing:border-box;background:rgb(0 0 0/.25)}'
         '.server-home-header img{width:165px;height:28px;object-fit:contain}.server-home-header>a:last-child{display:grid;place-items:center;width:40px;height:40px;border-radius:50%;border:1px solid rgb(255 255 255/.2);color:#fff;background:rgb(255 255 255/.1)}'
         '@supports(content-visibility:auto){.server-home-copy{content-visibility:auto;contain-intrinsic-size:auto 5000px}}'
@@ -1887,7 +1922,8 @@ def _home_render_assets(html: str) -> str:
         '@media(min-width:1024px){.home-hero-content{padding:128px 32px 0}.home-hero h1{font-size:72px}.server-home-header{height:100px}}'
         '</style>'
     )
-    return html.replace('</head>', critical_css + preload + '</head>')
+    mobile_photo_preload = '<link rel="preload" href="/mobile-hero-sunset-v2.webp" as="image" type="image/webp" media="(max-width: 767px)" fetchpriority="high">'
+    return html.replace('</head>', critical_css + mobile_photo_preload + preload + '</head>')
 
 
 def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
@@ -2016,6 +2052,14 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         )
         if has_hotels:
             parts.append(_tour_anchor_markers(tour, "hotels"))
+        published_hotels = hotel_records([tour], public=True)
+        if published_hotels:
+            hotel_links = "".join(
+                f'<li><a href="/hotels/{escape(hotel["slug"], quote=True)}">'
+                f'{escape(hotel["name"])}</a></li>'
+                for hotel in published_hotels
+            )
+            parts.append(f"<h2>Отели в туре</h2><ul>{hotel_links}</ul>")
         if youtube_id:
             youtube_title = _strip_html(tour.get("youtube_title")) or "Видео о туре"
             parts.append(
@@ -2047,6 +2091,20 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
                 _tour_anchor_markers(tour, "faq", "faq")
                 + f"<h2>Часто задаваемые вопросы</h2>{faq}"
             )
+    elif path.startswith("/hotels/") and seo.get("record"):
+        hotel = seo["record"]
+        parts.append(_render_rich_paragraphs(hotel.get("description")))
+        for field, label in (("meal_description", "Питание"), ("location_description", "Расположение"), ("beach", "Пляж"), ("transfer", "Трансфер"), ("rules", "Условия проживания")):
+            if hotel.get(field):
+                parts.append(f'<h2>{label}</h2>{_render_rich_paragraphs(hotel[field])}')
+        for field, label in (("amenities", "Удобства"), ("nearby", "Рядом с отелем")):
+            if hotel.get(field):
+                parts.append(f'<h2>{label}</h2>{_render_list(hotel[field])}')
+        if hotel.get("rooms"):
+            parts.append('<h2>Номера</h2>')
+            for room in hotel["rooms"]:
+                parts.append(f'<h3>{escape(str(room.get("title") or room.get("number") or "Номер"))}</h3>{_render_rich_paragraphs(room.get("description"))}')
+        parts.append(f'<p>{_link("/tours/" + hotel["tour_slug"] + "#" + hotel["tour_hotel_anchor"], "Даты и цены в туре")}</p>')
     elif path.startswith("/blog/") and seo.get("record"):
         parts.append(_render_article_body(seo["record"]))
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
@@ -2070,6 +2128,9 @@ important_info section_anchors faq map_embed content excerpt related_tour_slugs 
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
 content_blocks gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
 button_text button_url discount value subtitle tour_name
+hotel_id tour_id tour_slug tour_title chain_id chain_title tour_hotel_anchor rooms
+meal meal_description location address location_description nearby amenities beach
+transfer check_in check_out rules stars map_url page_enabled
 """.split())
 PUBLIC_SETTINGS_FIELDS = set("""
 company_short company_name address email phone phone_link site_url work_hours header_phones
@@ -2369,6 +2430,9 @@ def build_sitemap_xml() -> str:
     for article in list_items("articles"):
         if is_indexable_article(article):
             entries.append((f"/blog/{article['slug']}", _sitemap_date(article.get("seo_lastmod") or article.get("content_updated_at") or article.get("updated_at") or article.get("published_at"))))
+    for hotel in hotel_records(list_items("tours"), public=True):
+        if not hotel.get("seo_noindex"):
+            entries.append((f'/hotels/{hotel["slug"]}', _sitemap_date(hotel.get("updated_at"))))
     unique: dict[str, str | None] = {}
     for path, lastmod in entries:
         unique.setdefault(_clean_path(path), lastmod)
