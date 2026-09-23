@@ -11,7 +11,16 @@ FastAPI serves the React build and injects runtime SEO meta for page URLs.
 from __future__ import annotations
 
 from article_content import sync_article_text
-from hotels import decorate_tour, edit_hotel, ensure_hotel_ids, hotel_records, tour_hotels_revision, validate_tour_hotels
+from article_slugs import article_slug_patch, migrate_article_slugs
+from hotels import (
+    decorate_tour,
+    edit_hotel,
+    ensure_hotel_ids,
+    hotel_records,
+    migrate_hotel_catalog,
+    tour_hotels_revision,
+    validate_tour_hotels,
+)
 
 import asyncio
 import logging
@@ -323,6 +332,11 @@ class LeadStatusIn(BaseModel):
     status: str  # new | in_progress | closed
 
 
+class TourOrderIn(BaseModel):
+    bus: list[str]
+    air: list[str]
+
+
 # ---------- Helpers --------------------------------------------------------
 
 
@@ -547,6 +561,39 @@ def _order_value(item: dict) -> int:
         return int(item.get("order") or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _tour_transport_type(item: dict) -> str:
+    return "air" if str(item.get("transport_type") or "").lower() == "air" else "bus"
+
+
+def _has_positive_order(item: dict) -> bool:
+    try:
+        return int(item.get("order")) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _next_tour_order(
+    tours: list[dict], transport_type: str, exclude_id: str | None = None
+) -> int:
+    return max(
+        [
+            _order_value(tour)
+            for tour in tours
+            if tour.get("id") != exclude_id
+            and _tour_transport_type(tour) == transport_type
+        ]
+        or [0]
+    ) + 1
+
+
+def _tour_admin_sort_key(item: dict) -> tuple[int, int, str]:
+    return (
+        1 if _tour_transport_type(item) == "air" else 0,
+        _order_value(item),
+        str(item.get("title") or ""),
+    )
 
 
 def _parse_date(value: str | None) -> date | None:
@@ -1055,6 +1102,27 @@ def _saved_tour_pdf_program(
 # ---------- Public endpoints ----------------------------------------------
 
 
+def _hotel_state(tours: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
+    """Load canonical hotels and safely migrate legacy embedded records."""
+    tours = tours if tours is not None else list_items("tours")
+    catalog = list_items("hotels")
+    if migrate_hotel_catalog(tours, catalog):
+        # Write the catalog first: if a process stops between these two atomic
+        # writes, the next migration simply normalizes the remaining links.
+        save("hotels", catalog)
+        save("tours", tours)
+    return tours, catalog
+
+
+def _article_state() -> list[dict]:
+    """Load articles and persist the one-time underscore-to-hyphen migration."""
+
+    articles = list_items("articles")
+    if migrate_article_slugs(articles):
+        save("articles", articles)
+    return articles
+
+
 @api.get("/")
 async def root():
     return {"name": "Tour Operator API", "status": "ok"}
@@ -1070,7 +1138,8 @@ async def get_settings():
 async def get_tours(region: str | None = None, badge: str | None = None):
     # Public reads also clean stale departure dates from JSON storage.
     # A past date inside a chain is deleted, but the tour itself remains.
-    items = [t for t in _prune_all_tour_departure_dates() if is_listed_tour(t)]
+    all_tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
+    items = [t for t in all_tours if is_listed_tour(t)]
 
     if region:
         items = [t for t in items if t.get("region_slug") == region]
@@ -1079,23 +1148,24 @@ async def get_tours(region: str | None = None, badge: str | None = None):
         items = [t for t in items if badge in (t.get("badges") or [])]
 
     items.sort(key=_order_value)
-    return [decorate_tour(item) for item in items]
+    return [decorate_tour(item, catalog) for item in items]
 
 
 @api.get("/tours/{slug}")
 async def get_tour(slug: str):
-    tours = _prune_all_tour_departure_dates()
+    tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
     tour = next((t for t in tours if t.get("slug") == slug), None)
 
     if not is_public_tour(tour):
         raise HTTPException(status_code=404, detail="Тур не найден")
 
-    return decorate_tour(tour)
+    return decorate_tour(tour, catalog)
 
 
 @api.get("/hotels/{slug}")
 async def get_hotel(slug: str):
-    hotel = next((h for h in hotel_records(_prune_all_tour_departure_dates(), public=True) if h["slug"] == slug), None)
+    tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
+    hotel = next((h for h in hotel_records(tours, catalog, public=True) if h["slug"] == slug), None)
     if not hotel:
         raise HTTPException(404, "Отель не найден")
     return hotel
@@ -1145,14 +1215,14 @@ async def get_reviews():
 
 @api.get("/articles")
 async def get_articles():
-    items = [a for a in list_items("articles") if is_listed_article(a)]
+    items = [a for a in _article_state() if is_listed_article(a)]
     items.sort(key=lambda x: x.get("published_at", ""), reverse=True)
     return items
 
 
 @api.get("/articles/{slug}")
 async def get_article(slug: str):
-    article = get_by("articles", "slug", slug)
+    article = next((item for item in _article_state() if item.get("slug") == slug), None)
 
     if not article or not article.get("active", True):
         raise HTTPException(status_code=404, detail="Статья не найдена")
@@ -1413,8 +1483,61 @@ async def admin_update_tour_pdf_program(
     }
 
 
+def _reorder_tours(payload: TourOrderIn) -> list[dict]:
+    requested = {
+        "bus": [str(item_id).strip() for item_id in payload.bus],
+        "air": [str(item_id).strip() for item_id in payload.air],
+    }
+    submitted_ids = requested["bus"] + requested["air"]
+
+    if any(not item_id for item_id in submitted_ids) or len(submitted_ids) != len(
+        set(submitted_ids)
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Список туров содержит пустые или повторяющиеся записи.",
+        )
+
+    def reorder(tours: list[dict]) -> list[dict]:
+        tours_by_id = {
+            str(tour.get("id")): tour for tour in tours if tour.get("id")
+        }
+        if len(tours_by_id) != len(tours):
+            raise HTTPException(
+                status_code=409,
+                detail="В каталоге найден тур без ID. Обновите его перед сортировкой.",
+            )
+
+        if set(submitted_ids) != set(tours_by_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Список туров уже изменился. Закройте окно сортировки, откройте его снова и повторите действие.",
+            )
+
+        for transport_type, tour_ids in requested.items():
+            if any(
+                _tour_transport_type(tours_by_id[item_id]) != transport_type
+                for item_id in tour_ids
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Один из туров был перенесён в другой раздел. Обновите список и повторите сортировку.",
+                )
+            for order, item_id in enumerate(tour_ids, start=1):
+                tours_by_id[item_id]["order"] = order
+
+        return deepcopy(tours)
+
+    reordered = mutate_items("tours", reorder)
+    reordered, catalog = _hotel_state(reordered)
+    return [
+        decorate_tour(tour, catalog, admin=True)
+        for tour in sorted(reordered, key=_tour_admin_sort_key)
+    ]
+
+
 def _duplicate_tour(item_id: str) -> dict:
-    tours = list_items("tours")
+    tours, catalog = _hotel_state()
     source = next((tour for tour in tours if tour.get("id") == item_id), None)
 
     if not source:
@@ -1429,20 +1552,17 @@ def _duplicate_tour(item_id: str) -> dict:
     item["slug"] = _make_unique_slug(base_slug, existing_slugs)
     item["active"] = False
     item["hidden"] = True
-    item["order"] = _order_value(source) + 1
+    item["order"] = _next_tour_order(tours, _tour_transport_type(source))
     item["created_at"] = _now()
     item["updated_at"] = _now()
     item["seo_lastmod"] = ""
     item.pop("_hotels_revision", None)
-    # A copied tour owns independent hotel pages, even when it has the same rooms.
-    for group in [item, *(item.get("chains") or [])]:
-        for hotel in group.get("hotels") or []:
-            hotel["id"] = str(uuid.uuid4())
-            hotel.pop("hotel_slug", None)
-            hotel.pop("hotel_page_slug", None)
+    # Hotel references are intentionally preserved. The same canonical hotel
+    # can be offered by the original and the copied tour.
+    validate_tour_hotels(tours, item, catalog)
 
     add_item("tours", item)
-    return decorate_tour(item, admin=True)
+    return decorate_tour(item, catalog, admin=True)
 
 
 CONTENT_COLLECTIONS = {"tours", "articles"}
@@ -1485,6 +1605,22 @@ def _normalize_content_seo(name: str, item: dict, existing: dict | None = None) 
         return
     prefix = "/tours/" if name == "tours" else "/blog/"
     item["seo_canonical_url"] = canonical_url_for_path(canonical, prefix + str(slug))
+
+
+def _prepare_article_slug_payload(payload: dict, existing: dict | None = None) -> dict:
+    patch = article_slug_patch(payload, existing)
+    if "slug" not in patch:
+        return patch
+    slug = str(patch.get("slug") or "").strip()
+    if not slug:
+        raise HTTPException(status_code=422, detail="URL статьи не может быть пустым")
+    existing_id = (existing or {}).get("id")
+    if any(
+        item.get("slug") == slug and item.get("id") != existing_id
+        for item in _article_state()
+    ):
+        raise HTTPException(status_code=409, detail="Статья с таким URL уже существует")
+    return patch
 
 
 def _backfill_content_timestamps() -> None:
@@ -1532,8 +1668,13 @@ def _backfill_home_content_timestamp() -> None:
 
 def _crud_create(name: str, payload: dict) -> dict:
     if name == "hotels":
-        return mutate_items("tours", lambda tours: edit_hotel(tours, payload, timestamp=_now()))
+        tours, catalog = _hotel_state()
+        result = edit_hotel(catalog, tours, payload, timestamp=_now())
+        save("hotels", catalog)
+        return result
     item = {**payload, "id": str(uuid.uuid4())}
+    if name == "articles":
+        item = _prepare_article_slug_payload(item)
     item.pop("_hotels_revision", None)
     _normalize_content_seo(name, item)
 
@@ -1542,7 +1683,10 @@ def _crud_create(name: str, payload: dict) -> dict:
 
     if name == "tours":
         _prune_tour_departure_dates(item)
-        validate_tour_hotels(list_items("tours"), item)
+        tours, catalog = _hotel_state()
+        if not _has_positive_order(item):
+            item["order"] = _next_tour_order(tours, _tour_transport_type(item))
+        validate_tour_hotels(tours, item, catalog)
 
     if name in CONTENT_COLLECTIONS:
         now = _now()
@@ -1552,13 +1696,17 @@ def _crud_create(name: str, payload: dict) -> dict:
     add_item(name, item)
     if name == "faq" and is_home_faq(item):
         _touch_home_content_timestamp()
-    return decorate_tour(item, admin=True) if name == "tours" else item
+    return decorate_tour(item, catalog, admin=True) if name == "tours" else item
 
 
 def _crud_update(name: str, item_id: str, payload: dict) -> dict:
     if name == "hotels":
-        return mutate_items("tours", lambda tours: edit_hotel(tours, payload, item_id, timestamp=_now()))
+        tours, catalog = _hotel_state()
+        result = edit_hotel(catalog, tours, payload, item_id, timestamp=_now())
+        save("hotels", catalog)
+        return result
     if name == "tours":
+        _, catalog = _hotel_state()
         def update_tour(tours):
             existing = next((t for t in tours if t.get("id") == item_id), None)
             if existing is None:
@@ -1572,16 +1720,24 @@ def _crud_update(name: str, item_id: str, payload: dict) -> dict:
             patch.pop("created_at", None)
             _normalize_content_seo(name, patch, existing)
             updated = {**existing, **patch}
+            if _tour_transport_type(existing) != _tour_transport_type(updated):
+                updated["order"] = _next_tour_order(
+                    tours,
+                    _tour_transport_type(updated),
+                    exclude_id=item_id,
+                )
             _prune_tour_departure_dates(updated)
-            validate_tour_hotels(tours, updated)
+            validate_tour_hotels(tours, updated, catalog)
             if _content_changed(existing, updated):
                 updated["updated_at"] = _now()
             existing.clear()
             existing.update(updated)
-            return decorate_tour(existing, admin=True)
+            return decorate_tour(existing, catalog, admin=True)
         return mutate_items("tours", update_tour)
     payload = {**payload}
     existing = get_by(name, "id", item_id)
+    if name == "articles":
+        payload = _prepare_article_slug_payload(payload, existing)
     _normalize_content_seo(name, payload, existing)
 
     if name == "tours":
@@ -1607,7 +1763,11 @@ def _crud_update(name: str, item_id: str, payload: dict) -> dict:
 
 def _crud_delete(name: str, item_id: str) -> dict:
     if name == "hotels":
-        return mutate_items("tours", lambda tours: edit_hotel(tours, {}, item_id, delete=True, timestamp=_now()))
+        tours, catalog = _hotel_state()
+        result = edit_hotel(catalog, tours, {}, item_id, delete=True, timestamp=_now())
+        save("hotels", catalog)
+        save("tours", tours)
+        return result
     existing = get_by(name, "id", item_id)
     ok = delete_item(name, item_id)
 
@@ -1688,15 +1848,28 @@ async def admin_duplicate_tour(
     return _duplicate_tour(item_id)
 
 
+@api.put("/admin/tours/order")
+async def admin_reorder_tours(
+    payload: TourOrderIn,
+    current=Depends(get_current_admin),
+):
+    return _reorder_tours(payload)
+
+
 @api.get("/admin/{collection}")
 async def admin_list(collection: str, current=Depends(get_current_admin)):
     if collection not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
 
     if collection == "tours":
-        return [decorate_tour(tour, admin=True) for tour in _prune_all_tour_departure_dates()]
+        tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
+        return [
+            decorate_tour(tour, catalog, admin=True)
+            for tour in sorted(tours, key=_tour_admin_sort_key)
+        ]
     if collection == "hotels":
-        return hotel_records(_prune_all_tour_departure_dates())
+        tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
+        return hotel_records(tours, catalog)
 
     return list_items(collection)
 
@@ -1910,9 +2083,10 @@ async def on_startup() -> None:
     validate_auth_configuration()
     seed_admin()
     run_seed()
+    _article_state()
     _backfill_content_timestamps()
     _backfill_home_content_timestamp()
-    _prune_all_tour_departure_dates()
+    _hotel_state(_prune_all_tour_departure_dates())
 
     if _tour_date_cleanup_task is None or _tour_date_cleanup_task.done():
         _tour_date_cleanup_task = asyncio.create_task(

@@ -5,6 +5,7 @@ PassengerPython "/home/travelspac/virtualenv/travelspace.by/3.13/bin/python"
 PassengerAppLogFile "/home/travelspac/logs/passenger-travelspace.log"
 # DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
 Options -Indexes
+AddDefaultCharset UTF-8
 
 <IfModule mod_expires.c>
     ExpiresActive On

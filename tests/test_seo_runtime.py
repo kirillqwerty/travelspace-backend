@@ -176,6 +176,8 @@ def test_rendered_page_has_one_metadata_set_and_semantic_snapshot(tmp_path, monk
 
     html = seo_runtime.render_index_html("/tours/public-tour")
 
+    assert html.split("<head>", 1)[1].startswith('<meta charset="UTF-8">')
+    assert html.lower().count("<meta charset=") == 1
     assert html.count("<title") == 1
     assert html.count('name="description"') == 1
     assert html.count('rel="canonical"') == 1

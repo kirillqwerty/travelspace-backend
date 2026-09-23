@@ -7,7 +7,8 @@ public URL. React replaces the snapshot after it starts in the browser.
 from __future__ import annotations
 
 from article_content import article_blocks
-from hotels import decorate_tour, hotel_records
+from article_slugs import article_redirect_target, migrate_article_slugs
+from hotels import decorate_tour, hotel_records, migrate_hotel_catalog
 
 import json
 import os
@@ -20,7 +21,7 @@ from urllib.parse import urlparse
 
 from rich_text import render_inline, plain_text
 from homepage import home_benefits_content, home_page_content, is_home_faq
-from storage import get_by, list_items, load
+from storage import get_by, list_items, load, save
 
 ROOT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = ROOT_DIR.parent
@@ -273,7 +274,26 @@ BUILT_IN_REDIRECTS = {
     "/tours/saint-petersburg-5-dney": "/tours/avtobusniy-tur-v-peterburg-na-vyhodnye",
     "/tours/dagestan-7-dney": "/tours/avtobusniy-tur-v-dagestan",
     "/tours/kareliya-5-dney": "/tours/avtobusniy-tur-v-kareliyu",
+    "/hotels/smile-8bbdce1dc467": "/hotels/kobuleti-smile",
+    "/hotels/sweet-house-b25b6de019d6": "/hotels/kobuleti-sweet-house",
+    "/hotels/amirani-726d3fddff7c": "/hotels/kobuleti-amirani",
 }
+
+
+def _hotel_state() -> tuple[list[dict], list[dict]]:
+    tours = list_items("tours")
+    catalog = list_items("hotels")
+    if migrate_hotel_catalog(tours, catalog):
+        save("hotels", catalog)
+        save("tours", tours)
+    return tours, catalog
+
+
+def _article_state() -> list[dict]:
+    articles = list_items("articles")
+    if migrate_article_slugs(articles):
+        save("articles", articles)
+    return articles
 
 SEO_TAG_PATTERNS = [
     r"<title(?:\s[^>]*)?>.*?</title>",
@@ -849,11 +869,12 @@ def _not_found(kind: str = "Страница") -> dict[str, Any]:
 
 
 def _tour_seo(slug: str, path: str) -> dict[str, Any]:
-    tour = get_by("tours", "slug", slug)
+    tours, catalog = _hotel_state()
+    tour = next((item for item in tours if item.get("slug") == slug), None)
     if not is_public_tour(tour):
         return _not_found("Тур")
     if tour.get("hotels") or any(chain.get("hotels") for chain in tour.get("chains") or []):
-        tour = decorate_tour(tour)
+        tour = decorate_tour(tour, catalog)
     description = _first_text(
         tour.get("seo_description"), tour.get("short_description"), tour.get("tagline"),
         tour.get("description"), f"{tour.get('title', 'Тур')}: программа, даты и стоимость поездки."
@@ -883,7 +904,8 @@ def _tour_seo(slug: str, path: str) -> dict[str, Any]:
 
 
 def _hotel_seo(slug: str, path: str) -> dict[str, Any]:
-    hotel = next((h for h in hotel_records(list_items("tours"), public=True) if h["slug"] == slug), None)
+    tours, catalog = _hotel_state()
+    hotel = next((h for h in hotel_records(tours, catalog, public=True) if h["slug"] == slug), None)
     if not hotel:
         return {**_not_found(), "heading": "Отель не найден", "title": "Отель не найден | TRAVELSPACE"}
     description = _first_text(hotel.get("seo_description"), hotel.get("short_description"), hotel.get("description"), f'{hotel["name"]}: номера, питание и расположение.')
@@ -900,7 +922,7 @@ def _hotel_seo(slug: str, path: str) -> dict[str, Any]:
 
 
 def _article_seo(slug: str, path: str) -> dict[str, Any]:
-    article = get_by("articles", "slug", slug)
+    article = next((item for item in _article_state() if item.get("slug") == slug), None)
     if not is_public_article(article):
         return _not_found("Статья")
     description = _first_text(article.get("seo_description"), article.get("excerpt"), article.get("content"), DEFAULT_DESCRIPTION)
@@ -936,6 +958,13 @@ def get_redirect_target(path: str) -> str | None:
     path = _clean_path(path)
     if path in BUILT_IN_REDIRECTS:
         return BUILT_IN_REDIRECTS[path]
+    article_target = (
+        article_redirect_target(path, _article_state())
+        if path.startswith("/blog/")
+        else None
+    )
+    if article_target:
+        return article_target
     redirects = load("redirects", default=[])
     if not isinstance(redirects, list):
         return None
@@ -957,10 +986,12 @@ def get_http_status_for_path(path: str) -> int:
         return 200 if "/" not in slug and is_public_tour(get_by("tours", "slug", slug)) else 404
     if path.startswith("/blog/"):
         slug = path.removeprefix("/blog/")
-        return 200 if "/" not in slug and is_public_article(get_by("articles", "slug", slug)) else 404
+        article = next((item for item in _article_state() if item.get("slug") == slug), None)
+        return 200 if "/" not in slug and is_public_article(article) else 404
     if path.startswith("/hotels/"):
         slug = path.removeprefix("/hotels/")
-        return 200 if any(h["slug"] == slug for h in hotel_records(list_items("tours"), public=True)) else 404
+        tours, catalog = _hotel_state()
+        return 200 if any(h["slug"] == slug for h in hotel_records(tours, catalog, public=True)) else 404
     return 404
 
 
@@ -1978,7 +2009,7 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             parts.append(faq)
     elif path == "/blog":
         parts.append("<ul>")
-        for article in list_items("articles"):
+        for article in _article_state():
             if is_listed_article(article):
                 preview = _limit(article.get("excerpt") or article.get("content"), 260)
                 parts.append(f"<li>{_link('/blog/' + article['slug'], article.get('title'))}<p>{escape(preview)}</p></li>")
@@ -2052,7 +2083,11 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         )
         if has_hotels:
             parts.append(_tour_anchor_markers(tour, "hotels"))
-        published_hotels = hotel_records([tour], public=True)
+        _, catalog = _hotel_state()
+        published_hotels = [
+            hotel for hotel in hotel_records([tour], catalog, public=True)
+            if hotel.get("connections")
+        ]
         if published_hotels:
             hotel_links = "".join(
                 f'<li><a href="/hotels/{escape(hotel["slug"], quote=True)}">'
@@ -2104,7 +2139,15 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             parts.append('<h2>Номера</h2>')
             for room in hotel["rooms"]:
                 parts.append(f'<h3>{escape(str(room.get("title") or room.get("number") or "Номер"))}</h3>{_render_rich_paragraphs(room.get("description"))}')
-        parts.append(f'<p>{_link("/tours/" + hotel["tour_slug"] + "#" + hotel["tour_hotel_anchor"], "Даты и цены в туре")}</p>')
+        connections = hotel.get("connections") or []
+        if connections:
+            parts.append("<h2>Туры с проживанием в этом отеле</h2><ul>")
+            for connection in connections:
+                href = "/tours/" + str(connection.get("tour_slug") or "") + "#" + str(connection.get("tour_hotel_anchor") or "dates-prices")
+                parts.append(f'<li>{_link(href, str(connection.get("tour_title") or "Даты и программа тура"))}</li>')
+            parts.append("</ul>")
+        else:
+            parts.append(f'<p>{_link("/tours", "Посмотреть актуальные туры")}</p>')
     elif path.startswith("/blog/") and seo.get("record"):
         parts.append(_render_article_body(seo["record"]))
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
@@ -2123,7 +2166,7 @@ tagline short_description description region_name region_slug direction_name dur
 departure_city departure_cities departureCities price price_from currency additional_price
 additional_currency price_type badges hero_image hero_image_alt hero_mobile hero_mobile_image
 mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
-dates chains hotels use_hotel_chains program highlights what_to_see included excluded
+dates chains hotels connections use_hotel_chains show_chain_dates program highlights what_to_see included excluded
 important_info section_anchors faq map_embed content excerpt related_tour_slugs related_tours_title videos youtube_title youtube_url seo_title seo_description
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
 content_blocks gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
@@ -2222,7 +2265,7 @@ def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
                               for chain in card["chains"] if isinstance(chain, dict)]
         tours.append(card)
     articles = []
-    for article in list_items("articles"):
+    for article in _article_state():
         if not is_listed_article(article):
             continue
         if path == "/":
@@ -2387,6 +2430,21 @@ def render_index_html(path: str) -> str:
             fallback_css = fallback_css.replace('[data-seo-prerender]', '.server-home-copy')
             html = _home_render_assets(html)
         html = html.replace("</head>", fallback_css + "</head>")
+    # Runtime metadata and GTM are injected into <head>. Reinsert a single
+    # charset declaration afterwards so it is always the first head element.
+    html = re.sub(
+        r'<meta\s+charset\s*=\s*(?:["\'][^"\']+["\']|[^\s/>]+)\s*/?>',
+        "",
+        html,
+        flags=re.IGNORECASE,
+    )
+    html = re.sub(
+        r"(<head\b[^>]*>)",
+        r'\1<meta charset="UTF-8">',
+        html,
+        count=1,
+        flags=re.IGNORECASE,
+    )
     return html
 
 
@@ -2427,10 +2485,11 @@ def build_sitemap_xml() -> str:
     for tour in list_items("tours"):
         if is_indexable_tour(tour):
             entries.append((f"/tours/{tour['slug']}", _sitemap_date(tour.get("seo_lastmod") or tour.get("content_updated_at") or tour.get("updated_at") or tour.get("created_at"))))
-    for article in list_items("articles"):
+    for article in _article_state():
         if is_indexable_article(article):
             entries.append((f"/blog/{article['slug']}", _sitemap_date(article.get("seo_lastmod") or article.get("content_updated_at") or article.get("updated_at") or article.get("published_at"))))
-    for hotel in hotel_records(list_items("tours"), public=True):
+    hotel_tours, hotel_catalog = _hotel_state()
+    for hotel in hotel_records(hotel_tours, hotel_catalog, public=True):
         if not hotel.get("seo_noindex"):
             entries.append((f'/hotels/{hotel["slug"]}', _sitemap_date(hotel.get("updated_at"))))
     unique: dict[str, str | None] = {}

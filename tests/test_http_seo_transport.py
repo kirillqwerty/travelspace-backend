@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 
+import server
 from server import HeadAsGetMiddleware
 
 
@@ -49,4 +50,20 @@ def test_apache_config_redirects_http_and_caches_background_video():
 
     assert "RewriteCond %{HTTPS} !=on" in config
     assert "RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]" in config
+    assert "AddDefaultCharset UTF-8" in config
     assert "ExpiresByType video/mp4 A2592000" in config
+
+
+def test_html_response_declares_utf8_content_type(monkeypatch):
+    monkeypatch.setattr(server, "_safe_frontend_file", lambda _path: None)
+    monkeypatch.setattr(server, "get_redirect_target", lambda _path: None)
+    monkeypatch.setattr(
+        server,
+        "_cached_public_page",
+        lambda _path, _signature: ("<!doctype html><html></html>", 200),
+    )
+    monkeypatch.setattr(server, "_public_page_signature", lambda: ())
+
+    response = asyncio.run(server.serve_react_app("test-page"))
+
+    assert response.headers["content-type"] == "text/html; charset=utf-8"
