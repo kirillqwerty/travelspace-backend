@@ -376,15 +376,22 @@ def _date_range(item: dict) -> str:
     return start or end
 
 
+def _tour_date_sources(tour: dict) -> list[tuple[str, dict]]:
+    main = [("", item) for item in tour.get("dates") or [] if isinstance(item, dict)]
+    chains = [
+        (_pdf_plain(chain.get("title")), item)
+        for chain in tour.get("chains") or []
+        if isinstance(chain, dict) and chain.get("active") is not False
+        for item in chain.get("dates") or []
+        if isinstance(item, dict)
+    ]
+    if tour.get("show_chain_dates") is False:
+        return main or chains
+    return (chains or main) if tour.get("use_hotel_chains") else (main or chains)
+
+
 def _collect_dates(tour: dict) -> list[str]:
-    raw: list[dict] = []
-
-    if isinstance(tour.get("dates"), list):
-        raw.extend([d for d in tour.get("dates") if isinstance(d, dict)])
-
-    for chain in tour.get("chains") or []:
-        if isinstance(chain, dict) and isinstance(chain.get("dates"), list):
-            raw.extend([d for d in chain.get("dates") if isinstance(d, dict)])
+    raw = [item for _, item in _tour_date_sources(tour)]
 
     today = date.today()
     actual_dates: list[tuple[date, str]] = []
@@ -1160,17 +1167,7 @@ def _effective_price(record: dict, fallback: dict | None = None) -> str:
 
 def _date_rows(tour: dict) -> list[list[str]]:
     dated: list[tuple[date, list[str]]] = []
-    sources: list[tuple[str, dict]] = []
-    sources.extend(("", item) for item in tour.get("dates") or [] if isinstance(item, dict))
-    for chain in tour.get("chains") or []:
-        if not isinstance(chain, dict) or chain.get("active") is False:
-            continue
-        chain_title = _pdf_plain(chain.get("title"))
-        sources.extend(
-            (chain_title, item)
-            for item in chain.get("dates") or []
-            if isinstance(item, dict)
-        )
+    sources = _tour_date_sources(tour)
 
     today = date.today()
     for option, item in sources:

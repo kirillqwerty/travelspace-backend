@@ -93,6 +93,15 @@ def test_real_chain_name_is_kept_as_the_date_option():
     assert rows[0][1] == "Отель у моря"
 
 
+def test_hidden_chain_dates_use_main_schedule_in_pdf():
+    tour, _marker = _long_tour()
+    tour["use_hotel_chains"] = True
+    tour["show_chain_dates"] = False
+    tour["chains"] = [{"title": "Номер", "dates": [{"start": "2099-07-01", "end": "2099-07-05"}]}]
+    assert len(_date_rows(tour)) == 1
+    assert _date_rows(tour)[0][1] == ""
+
+
 def test_accommodation_date_period_is_stacked():
     assert _stacked_date_label(
         {

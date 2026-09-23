@@ -65,7 +65,7 @@ from fastapi.responses import (
     RedirectResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 
 from auth import (
     ADMIN_COOKIE_MAX_AGE,
@@ -315,6 +315,7 @@ class LeadIn(BaseModel):
     tour_slug: str | None = None
     region: str | None = None
     date: str | None = None
+    travelers_count: int | None = Field(default=None, ge=1, le=100)
     comment: str | None = None
     source_page: str | None = None
     consent: bool = True
@@ -395,11 +396,12 @@ def _lead_email_rows(lead: dict) -> list[tuple[str, str]]:
         ("Тип заявки", _lead_form_type_label(lead.get("form_type"))),
         ("Имя", _as_text(lead.get("name")) or "—"),
         ("Телефон", _as_text(lead.get("phone"))),
+        ("Количество человек", _as_text(lead.get("travelers_count")) or "—"),
         ("Тур", _as_text(lead.get("tour")) or "—"),
-        ("Slug тура", _as_text(lead.get("tour_slug")) or "—"),
-        ("Регион / направление", _as_text(lead.get("region")) or "—"),
         ("Дата", _as_text(lead.get("date")) or "—"),
         ("Комментарий", _as_text(lead.get("comment")) or "—"),
+        ("Slug тура", _as_text(lead.get("tour_slug")) or "—"),
+        ("Регион / направление", _as_text(lead.get("region")) or "—"),
     ]
 
     if extra:
@@ -472,20 +474,30 @@ def _build_lead_email(lead: dict, recipient: str) -> EmailMessage:
         f"{label}: {value}" for label, value in rows
     )
 
-    html_rows = "".join(
-        "<tr>"
-        f"<td style='padding:10px 12px;border:1px solid #d1d5db;background:#f9fafb;color:#111827;font-weight:700'>{escape(label)}</td>"
-        f"<td style='padding:10px 12px;border:1px solid #d1d5db;background:#ffffff;color:#111827'>{escape(value)}</td>"
-        "</tr>"
-        for label, value in rows
-    )
+    def render_rows(items):
+        return "".join(
+            "<tr>"
+            f"<td width='210' style='width:210px;min-width:160px;padding:10px 12px;border:1px solid #d1d5db;background:#f9fafb;color:#111827;font-weight:700;vertical-align:top'>{escape(label)}</td>"
+            f"<td style='padding:10px 12px;border:1px solid #d1d5db;background:#ffffff;color:#111827;word-break:break-word'>{escape(value)}</td>"
+            "</tr>"
+            for label, value in items
+        )
+
+    main_rows = render_rows(rows[:7])
+    analytics_rows = render_rows(rows[7:])
 
     html_body = f"""
     <div style="margin:0;padding:16px;background:#ffffff;font-family:Arial,sans-serif;color:#111827;line-height:1.5">
       <h2 style="margin:0 0 16px;color:#111827;font-size:20px;line-height:1.25">Новая заявка с сайта</h2>
-      <table style="border-collapse:collapse;width:100%;max-width:760px;background:#ffffff;color:#111827;font-size:14px">
-        {html_rows}
+      <table style="border-collapse:collapse;width:100%;max-width:760px;background:#ffffff;color:#111827;font-size:14px;table-layout:fixed">
+        {main_rows}
       </table>
+      <details style="max-width:760px;margin-top:16px">
+        <summary style="cursor:pointer;color:#9a3412;font-size:14px;font-weight:700;padding:8px 0">Дополнительная информация для аналитики</summary>
+        <table style="border-collapse:collapse;width:100%;background:#ffffff;color:#111827;font-size:14px;table-layout:fixed">
+          {analytics_rows}
+        </table>
+      </details>
     </div>
     """
 
@@ -1173,11 +1185,13 @@ async def get_hotel(slug: str):
 
 @api.get("/tours/{slug}/program.pdf")
 async def download_tour_program(slug: str):
-    tours = _prune_all_tour_departure_dates()
+    tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
     tour = next((t for t in tours if t.get("slug") == slug), None)
 
     if not is_public_tour(tour):
         raise HTTPException(status_code=404, detail="Тур не найден")
+
+    tour = decorate_tour(tour, catalog)
 
     try:
         settings = load("settings", default={})

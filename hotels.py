@@ -26,6 +26,7 @@ HOTEL_SLUG_MIGRATIONS = {
     "amirani-726d3fddff7c": "kobuleti-amirani",
 }
 LEGACY_ANCHOR_SLUGS = {
+    "smile": "kobuleti-smile",
     "sweet-house": "kobuleti-sweet-house",
     "amirani": "kobuleti-amirani",
 }
@@ -176,7 +177,7 @@ def _connection_dates(tour, group):
     if tour.get("use_hotel_chains") and tour.get("show_chain_dates") is not False:
         dates = group.get("dates") or []
     else:
-        dates = tour.get("dates") or []
+        dates = tour.get("dates") or group.get("dates") or []
     return deepcopy(dates)
 
 
@@ -190,6 +191,8 @@ def _connection(tour, group_id, group, hotel_id):
         "tour_image": tour.get("image") or next(iter(tour.get("images") or []), ""),
         "tour_duration": tour.get("duration") or tour.get("duration_days"),
         "price_from": tour.get("price_from"),
+        "additional_price": tour.get("additional_price"),
+        "additional_currency": tour.get("additional_currency"),
         "price_usd": tour.get("price_usd"),
         "price_byn": tour.get("price_byn"),
         "currency": tour.get("currency"),

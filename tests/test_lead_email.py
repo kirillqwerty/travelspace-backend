@@ -10,6 +10,7 @@ def test_lead_email_rows_include_saved_attribution_fields():
         "tour_slug": "kareliya",
         "region": "kareliya",
         "date": "10.10.2026",
+        "travelers_count": 2,
         "comment": "2 человека",
         "source_page": "/tours/kareliya?utm_source=yandex",
         "page_url": "https://travelspace.by/tours/kareliya?utm_source=yandex",
@@ -38,6 +39,7 @@ def test_lead_email_rows_include_saved_attribution_fields():
     values = dict(rows)
 
     assert values["Slug тура"] == "kareliya"
+    assert values["Количество человек"] == "2"
     assert values["Регион / направление"] == "kareliya"
     assert values["URL отправки заявки"].startswith("https://travelspace.by/")
     assert values["Первая страница визита"] == "/tours?utm_source=yandex"
@@ -87,3 +89,7 @@ def test_lead_email_html_escapes_attribution_values(monkeypatch):
     html = message.get_body(preferencelist=("html",)).get_content()
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "<details" in html
+    assert "Дополнительная информация для аналитики" in html
+    assert html.index("Комментарий") < html.index("<details") < html.index("UTM campaign")
+    assert "width='210'" in html

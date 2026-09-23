@@ -1387,15 +1387,20 @@ def _render_tour_faq(faq: Any) -> str:
 
 
 def _tour_dates(tour: dict[str, Any]) -> list[dict[str, Any]]:
-    dates: list[dict[str, Any]] = []
-    if isinstance(tour.get("dates"), list):
-        dates.extend(item for item in tour["dates"] if isinstance(item, dict))
+    main_dates = [item for item in tour.get("dates") or [] if isinstance(item, dict)]
+    chain_dates: list[dict[str, Any]] = []
     if isinstance(tour.get("chains"), list):
         for chain in tour["chains"]:
             if not isinstance(chain, dict) or chain.get("active", True) is False:
                 continue
             if isinstance(chain.get("dates"), list):
-                dates.extend(item for item in chain["dates"] if isinstance(item, dict))
+                chain_dates.extend(item for item in chain["dates"] if isinstance(item, dict))
+    if tour.get("show_chain_dates") is False:
+        dates = main_dates or chain_dates
+    elif tour.get("use_hotel_chains"):
+        dates = chain_dates or main_dates
+    else:
+        dates = main_dates or chain_dates
     unique: dict[str, dict[str, Any]] = {}
     for item in dates:
         if item.get("status") == "hidden":
@@ -2274,12 +2279,12 @@ def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
             summary = _public_record(
                 article,
                 {
-                    "id", "slug", "title", "published_at", "active",
+                    "id", "slug", "title", "title_highlighted", "published_at", "active",
                     "hidden", "hidden_from_list", "hide_from_list", "order",
                 },
             )
         else:
-            summary = _public_record(article, {"id", "slug", "title", "excerpt", "cover", "images", "seo_image", "seo_description", "gallery", "published_at", "active", "hidden", "order"})
+            summary = _public_record(article, {"id", "slug", "title", "title_highlighted", "excerpt", "cover", "images", "seo_image", "seo_description", "gallery", "published_at", "active", "hidden", "order"})
             summary["excerpt"] = _limit(_first_text(article.get("excerpt"), article.get("content")), 190)
         articles.append(summary)
     status = get_http_status_for_path(path)

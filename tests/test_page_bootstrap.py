@@ -67,6 +67,25 @@ def test_full_record_and_readable_content_exist_without_javascript(render):
     assert 'id="server-page-style"' in document
 
 
+def test_article_menu_bootstrap_includes_editor_highlight(render, monkeypatch):
+    monkeypatch.setitem(ARTICLES[0], "title_highlighted", "Главные **места** Петербурга")
+    data = bootstrap(render("/"))
+    article = next(item for item in data["site"]["articles"] if item["slug"] == ARTICLES[0]["slug"])
+    assert article["title_highlighted"] == "Главные **места** Петербурга"
+
+
+def test_tour_snapshot_uses_main_dates_when_chain_dates_are_hidden():
+    tour = {
+        "use_hotel_chains": True,
+        "show_chain_dates": False,
+        "dates": [{"id": "main", "start": "2099-06-01"}],
+        "chains": [{"active": True, "dates": [{"id": "chain", "start": "2099-07-01"}]}],
+    }
+    assert [date["id"] for date in seo_runtime._tour_dates(tour)] == ["main"]
+    tour["dates"] = []
+    assert [date["id"] for date in seo_runtime._tour_dates(tour)] == ["chain"]
+
+
 def test_tour_advertising_anchors_are_preserved_in_bootstrap_and_snapshot(
     render, monkeypatch
 ):

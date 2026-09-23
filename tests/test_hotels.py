@@ -51,6 +51,15 @@ def test_legacy_profile_is_migrated_without_losing_data(client):
     assert stored_link == {"id": "hotel-1", "hotel_id": "hotel-1", "anchor_slug": "smile"}
 
 
+def test_smile_without_legacy_slug_uses_existing_public_address(client):
+    tours = storage.load("tours")
+    tours[0]["chains"][0]["hotels"][0].pop("hotel_slug")
+    storage.save("tours", tours)
+
+    assert first_hotel(client)["slug"] == "kobuleti-smile"
+    assert client.get("/api/hotels/kobuleti-smile").status_code == 200
+
+
 def test_hotel_is_edited_only_in_catalog_and_tour_is_hydrated(client):
     hotel = first_hotel(client)
     response = client.put(f'/api/admin/hotels/{hotel["id"]}', json={**hotel, "name": "Smile Hotel", "nearby": ["Море — 200 м"]})
@@ -112,6 +121,15 @@ def test_main_dates_switch_replaces_chain_dates_in_hotel_connection(client):
     assert client.put("/api/admin/tours/tour-1", json=tour).status_code == 200
     connection = first_hotel(client)["connections"][0]
     assert [item["id"] for item in connection["dates"]] == ["main-date"]
+
+
+def test_hidden_chain_dates_fall_back_to_existing_schedule(client):
+    tour = client.get("/api/admin/tours").json()[0]
+    tour["show_chain_dates"] = False
+    tour["dates"] = []
+    assert client.put("/api/admin/tours/tour-1", json=tour).status_code == 200
+    connection = first_hotel(client)["connections"][0]
+    assert [date["id"] for date in connection["dates"]] == ["date-1"]
 
 
 def test_duplicate_tour_reuses_same_hotel(client):
