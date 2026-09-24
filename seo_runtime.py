@@ -909,7 +909,7 @@ def _hotel_seo(slug: str, path: str) -> dict[str, Any]:
     if not hotel:
         return {**_not_found(), "heading": "Отель не найден", "title": "Отель не найден | TRAVELSPACE"}
     description = _first_text(hotel.get("seo_description"), hotel.get("short_description"), hotel.get("description"), f'{hotel["name"]}: номера, питание и расположение.')
-    image = hotel.get("seo_image") or hotel.get("image") or next(iter(hotel.get("images") or []), DEFAULT_IMAGE)
+    image = hotel.get("seo_image") or next(iter(hotel.get("images") or []), None) or hotel.get("image") or DEFAULT_IMAGE
     canonical = _record_canonical(hotel, path)
     return {
         "title": hotel.get("seo_title") or f'{hotel["name"]} | TRAVELSPACE',

@@ -71,6 +71,20 @@ def test_hotel_is_edited_only_in_catalog_and_tour_is_hydrated(client):
     assert hydrated["nearby"] == ["Море — 200 м"]
 
 
+def test_hotel_seo_photo_is_used_in_link_preview(client):
+    hotel = first_hotel(client)
+    payload = {**hotel, "seo_image": "/uploads/share.webp", "images": ["/uploads/gallery.webp"], "image": "/uploads/old.webp"}
+    assert client.put(f'/api/admin/hotels/{hotel["id"]}', json=payload).status_code == 200
+    path = f'/hotels/{hotel["slug"]}'
+    html = seo_runtime.render_index_html(path)
+    assert 'property="og:image" content="https://travelspace.by/uploads/share.webp"' in html
+
+    updated = first_hotel(client)
+    assert client.put(f'/api/admin/hotels/{hotel["id"]}', json={**updated, "seo_image": ""}).status_code == 200
+    fallback = seo_runtime.render_index_html(path)
+    assert 'property="og:image" content="https://travelspace.by/uploads/gallery.webp"' in fallback
+
+
 def test_stale_tour_payload_cannot_overwrite_hotel(client):
     tour = client.get("/api/admin/tours").json()[0]
     hotel = first_hotel(client)
