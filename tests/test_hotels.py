@@ -85,6 +85,22 @@ def test_hotel_seo_photo_is_used_in_link_preview(client):
     assert 'property="og:image" content="https://travelspace.by/uploads/gallery.webp"' in fallback
 
 
+def test_hotel_video_description_is_saved_and_only_shown_with_video(client):
+    hotel = first_hotel(client)
+    path = f'/hotels/{hotel["slug"]}'
+    response = client.put(f'/api/admin/hotels/{hotel["id"]}', json={**hotel,
+        "youtube_title": "Прогулка по отелю", "youtube_url": "https://youtu.be/dQw4w9WgXcQ",
+        "youtube_description": "Показываем номера и бассейн."})
+    assert response.status_code == 200, response.text
+    assert first_hotel(client)["youtube_description"] == "Показываем номера и бассейн."
+    assert "Показываем номера и бассейн." in seo_runtime.render_index_html(path)
+    updated = first_hotel(client)
+    assert client.put(f'/api/admin/hotels/{hotel["id"]}', json={**updated, "youtube_description": ""}).status_code == 200
+    html = seo_runtime.render_index_html(path)
+    assert "Прогулка по отелю" in html
+    assert "Показываем номера и бассейн." not in html
+
+
 def test_stale_tour_payload_cannot_overwrite_hotel(client):
     tour = client.get("/api/admin/tours").json()[0]
     hotel = first_hotel(client)
@@ -155,7 +171,7 @@ def test_duplicate_tour_reuses_same_hotel(client):
     assert len(first_hotel(client)["connections"]) == 2
 
 
-@pytest.mark.parametrize("field,value", [("hotel_slug", "Bad URL"), ("map_url", "javascript:alert(1)"), ("rooms", "bad"), ("rooms", ["bad"])])
+@pytest.mark.parametrize("field,value", [("hotel_slug", "Bad URL"), ("map_url", "javascript:alert(1)"), ("alternative_url", "javascript:alert(1)"), ("alternative_url", "//other.example/tours"), ("rooms", "bad"), ("rooms", ["bad"])])
 def test_invalid_hotel_changes_are_rejected_atomically(client, field, value):
     hotel = first_hotel(client)
     before = storage.load("hotels")
@@ -197,6 +213,117 @@ def test_deleting_tour_preserves_hotel(client):
     remaining = first_hotel(client)
     assert remaining["id"] == hotel["id"]
     assert remaining["connections"] == []
+
+
+def test_unlinked_hotel_keeps_page_and_editor_offer_until_reconnected(client):
+    hotel = first_hotel(client)
+    path = f'/hotels/{hotel["slug"]}'
+    payload = {
+        **hotel,
+        "alternative_text": "Сейчас предлагаем другие варианты у моря.",
+        "alternative_link_text": "Туры в Грузию",
+        "alternative_url": "/tours/gruziya",
+    }
+    assert client.put(f'/api/admin/hotels/{hotel["id"]}', json=payload).status_code == 200
+    tour = client.get("/api/admin/tours").json()[0]
+    tour["chains"][0]["hotels"] = []
+    assert client.put("/api/admin/tours/tour-1", json=tour).status_code == 200
+
+    assert storage.load("hotels")[0]["alternative_text"] == payload["alternative_text"]
+    public = client.get(f'/api/hotels/{hotel["slug"]}').json()
+    assert public["connections"] == []
+    assert public["alternative_offer"] == {
+        "text": payload["alternative_text"],
+        "link_text": payload["alternative_link_text"],
+        "url": payload["alternative_url"],
+    }
+    assert client.get(path).status_code == 200
+    seo = seo_runtime.get_seo_for_path(path)
+    assert seo["canonical_url"] == f'https://travelspace.by{path}'
+    assert seo["no_index"] is False
+    assert seo_runtime._page_bootstrap(path, seo)["record"]["alternative_offer"]["url"] == "/tours/gruziya"
+    snapshot = seo_runtime.render_index_html(path)
+    assert payload["alternative_text"] in snapshot
+    assert '<a href="/tours/gruziya">Туры в Грузию</a>' in snapshot
+    assert "Туры с проживанием в этом отеле" not in snapshot
+    assert path in seo_runtime.build_sitemap_xml()
+
+    tour = client.get("/api/admin/tours").json()[0]
+    tour["chains"][0]["hotels"] = [{"id": hotel["id"], "hotel_id": hotel["id"]}]
+    assert client.put("/api/admin/tours/tour-1", json=tour).status_code == 200
+    assert client.get(f'/api/hotels/{hotel["slug"]}').json()["alternative_offer"] is None
+    assert payload["alternative_text"] not in seo_runtime.render_index_html(path)
+
+
+def test_hotel_alternative_hides_link_to_unpublished_target(client):
+    hotel = first_hotel(client)
+    payload = {**hotel, "alternative_url": "/tours/unpublished-tour"}
+    assert client.put(f'/api/admin/hotels/{hotel["id"]}', json=payload).status_code == 200
+    tour = client.get("/api/admin/tours").json()[0]
+    tour["chains"][0]["hotels"] = []
+    assert client.put("/api/admin/tours/tour-1", json=tour).status_code == 200
+
+    public = client.get(f'/api/hotels/{hotel["slug"]}').json()
+    assert public["alternative_offer"]["url"] == ""
+    assert "В этом году мы не работаем с данным отелем" in public["alternative_offer"]["text"]
+    snapshot = seo_runtime.render_index_html(f'/hotels/{hotel["slug"]}')
+    assert 'href="/tours/unpublished-tour"' not in snapshot
+
+
+def test_inactive_tour_does_not_leave_stale_hotel_breadcrumb(client):
+    hotel = first_hotel(client)
+    tour = client.get("/api/admin/tours").json()[0]
+    tour["active"] = False
+    assert client.put("/api/admin/tours/tour-1", json=tour).status_code == 200
+
+    path = f'/hotels/{hotel["slug"]}'
+    public = client.get(f'/api/hotels/{hotel["slug"]}').json()
+    assert public["connections"] == []
+    assert public["tour_slug"] is None
+    assert public["alternative_offer"] is not None
+    seo = seo_runtime.get_seo_for_path(path)
+    assert seo["no_index"] is False
+    assert all(item.get("item") != "https://travelspace.by/tours/georgia"
+               for item in seo_runtime._breadcrumb_items(path, seo))
+
+
+def test_hub_hotels_follow_published_tour_links_without_duplicates(client):
+    hotel = first_hotel(client)
+    other = client.post("/api/admin/hotels", json={
+        "name": "Отель у моря", "hotel_slug": "sea-hotel", "location": "Батуми",
+        "meal": "Завтрак", "images": ["/uploads/sea.webp"],
+    }).json()
+    unpublished = client.post("/api/admin/hotels", json={
+        "name": "Закрытый отель", "hotel_slug": "hidden-hotel", "page_enabled": False,
+    }).json()
+    tours = storage.load("tours")
+    tours.append({
+        "id": "tour-2", "slug": "second-georgia", "title": "Ещё один тур в Грузию",
+        "active": True, "hotels": [
+            {"hotel_id": hotel["id"]}, {"hotel_id": other["id"]},
+            {"hotel_id": unpublished["id"]},
+        ],
+    })
+    storage.save("tours", tours)
+    storage.save("settings", {"seo_hubs": {"gruziya": {"tour_ids": ["tour-1", "tour-2"]}}})
+
+    cards = client.get("/api/seo-hubs/gruziya/hotels").json()
+    assert [item["slug"] for item in cards] == [hotel["slug"], other["slug"]]
+    assert cards[0]["tour_count"] == 2
+    assert cards[0]["room_count"] == 1
+    assert cards[1]["image"] == "/uploads/sea.webp"
+    assert "price" not in cards[0]
+    snapshot = seo_runtime.render_index_html("/tours/gruziya")
+    assert snapshot.count(f'https://travelspace.by/hotels/{hotel["slug"]}') == 1
+    assert "Отели в турах этого направления" in snapshot
+    assert "Отель у моря" in snapshot
+    assert "Закрытый отель" not in snapshot
+    assert "Отели в турах этого направления" not in seo_runtime.render_index_html("/tours/kareliya")
+
+    tours[0]["active"] = False
+    tours[1]["active"] = False
+    storage.save("tours", tours)
+    assert client.get("/api/seo-hubs/gruziya/hotels").json() == []
 
 
 def test_hotel_admin_requires_authentication(client):

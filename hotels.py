@@ -17,8 +17,9 @@ HOTEL_FIELDS = set("""
 name description short_description images image image_alts meal meal_description
 location address location_description nearby amenities beach transfer check_in
 check_out rules rooms active order anchor_slug hotel_slug page_enabled stars
-youtube_url youtube_title seo_title seo_description seo_image seo_noindex
+youtube_url youtube_title youtube_description seo_title seo_description seo_image seo_noindex
 seo_nofollow seo_canonical_url map_url updated_at created_at
+alternative_text alternative_link_text alternative_url
 """.split())
 HOTEL_SLUG_MIGRATIONS = {
     "smile-8bbdce1dc467": "kobuleti-smile",
@@ -210,7 +211,7 @@ def hotel_records(tours, catalog=None, public=False):
     catalog = catalog or []
     connections = {str(hotel.get("id")): [] for hotel in catalog if hotel.get("id")}
     for tour in tours:
-        if public and tour.get("active") is False:
+        if public and (tour.get("active") is False or not tour.get("slug")):
             continue
         for group_id, group in hotel_groups(tour):
             if public and group.get("active") is False:
@@ -232,6 +233,11 @@ def hotel_records(tours, catalog=None, public=False):
         record["slug"] = hotel_slug(record)
         record["hotel_slug"] = record["slug"]
         record["connections"] = connections.get(record["id"], [])
+        if public:
+            record["connections"] = [
+                item for item in record["connections"]
+                if item.get("tour_active") and item.get("chain_active")
+            ]
         first = next(
             (item for item in record["connections"] if item.get("tour_active") and item.get("chain_active")),
             record["connections"][0] if record["connections"] else {},
@@ -244,10 +250,6 @@ def hotel_records(tours, catalog=None, public=False):
         record["revision"] = revision({key: value for key, value in source.items() if key != "revision"})
         if public:
             record.pop("revision", None)
-            record["connections"] = [
-                item for item in record["connections"]
-                if item.get("tour_active") and item.get("chain_active")
-            ]
             record["rooms"] = [
                 room for room in record.get("rooms") or []
                 if isinstance(room, dict) and room.get("active") is not False
@@ -303,6 +305,10 @@ def validate_hotel(hotel):
     if map_url and not re.match(r"^https?://[^\s]+$", map_url):
         raise HTTPException(422, "Для карты укажите ссылку https://, а не код iframe.")
     hotel["map_url"] = map_url
+    alternative_url = str(hotel.get("alternative_url") or "").strip()
+    if alternative_url and not re.fullmatch(r"/(?!/)[a-z0-9/_#-]+", alternative_url):
+        raise HTTPException(422, "Для альтернативы укажите внутреннюю ссылку вида /tours/gruziya.")
+    hotel["alternative_url"] = alternative_url
 
 
 def _normalize_tour_links(tour, catalog):

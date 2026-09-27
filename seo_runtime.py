@@ -6,9 +6,10 @@ public URL. React replaces the snapshot after it starts in the browser.
 
 from __future__ import annotations
 
-from article_content import article_blocks
+from article_content import article_blocks, article_menu_links, remove_legacy_article_h1
 from article_slugs import article_redirect_target, migrate_article_slugs
 from hotels import decorate_tour, hotel_records, migrate_hotel_catalog
+from visas import public_visa, public_visas, visa_page
 
 import json
 import os
@@ -17,7 +18,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from rich_text import render_inline, plain_text
 from homepage import home_benefits_content, home_page_content, is_home_faq
@@ -106,6 +107,7 @@ EMPTY_LANDING_CONTENT: dict[str, Any] = {
     "cover_alt": "",
     "youtube_title": "",
     "youtube_url": "",
+    "youtube_description": "",
     "content_title": "",
     "content_body": "",
     "content_sections": [],
@@ -291,7 +293,9 @@ def _hotel_state() -> tuple[list[dict], list[dict]]:
 
 def _article_state() -> list[dict]:
     articles = list_items("articles")
-    if migrate_article_slugs(articles):
+    slugs_changed = migrate_article_slugs(articles)
+    headings_changed = remove_legacy_article_h1(articles)
+    if slugs_changed or headings_changed:
         save("articles", articles)
     return articles
 
@@ -417,6 +421,7 @@ OPTIONAL_SEO_HUB_FIELDS = (
     "cover_alt",
     "youtube_title",
     "youtube_url",
+    "youtube_description",
     "content_title",
     "content_body",
     "how_to_title",
@@ -704,6 +709,60 @@ def tours_for_landing(path: str) -> list[dict[str, Any]]:
     return [tour for tour in tours if any(keyword in _tour_haystack(tour) for keyword in keywords)]
 
 
+def hotels_for_landing(path: str) -> list[dict[str, Any]]:
+    """Published hotel cards connected to the tours actually shown in a hub."""
+    path = _clean_path(path)
+    if path not in _landing_pages():
+        return []
+    _, catalog = _hotel_state()
+    selected_tours = tours_for_landing(path)
+    cards = []
+    for hotel in hotel_records(selected_tours, catalog, public=True):
+        connections = hotel.get("connections") or []
+        if not connections:
+            continue
+        images = hotel.get("images") or []
+        image_alts = hotel.get("image_alts") or []
+        location = str(hotel.get("location") or hotel.get("address") or "").strip()
+        meal = str(hotel.get("meal") or "").strip()
+        cards.append({
+            "id": hotel["id"], "slug": hotel["slug"], "name": hotel["name"],
+            "image": images[0] if images else hotel.get("image") or "",
+            "image_alt": image_alts[0] if image_alts else hotel["name"],
+            "location": "" if location.lower() in {"расположение", "адрес", "—"} else location,
+            "meal": "" if meal.lower() in {"питание", "—"} else meal,
+            "stars": hotel.get("stars"),
+            "room_count": len(hotel.get("rooms") or []),
+            "short_description": hotel.get("short_description") or "",
+            "tour_count": len({item.get("tour_id") for item in connections}),
+        })
+    return cards
+
+
+DEFAULT_HOTEL_ALTERNATIVE_TEXT = (
+    "В этом году мы не работаем с данным отелем, но можем предложить другие варианты."
+)
+
+
+def hotel_alternative_offer(hotel: dict[str, Any]) -> dict[str, str] | None:
+    """Resolve a hotel-only offer without publishing stale or unsafe links."""
+    if hotel.get("connections"):
+        return None
+    raw_url = str(hotel.get("alternative_url") or "").strip() or "/tours"
+    target_path = raw_url.partition("#")[0]
+    target_valid = (
+        re.fullmatch(r"/(?!/)[a-z0-9/_#-]+", raw_url) is not None
+        and target_path != f'/hotels/{hotel.get("slug")}'
+        and not target_path.startswith(("/api", "/admin"))
+        and get_http_status_for_path(target_path) == 200
+    )
+    return {
+        "text": str(hotel.get("alternative_text") or "").strip() or DEFAULT_HOTEL_ALTERNATIVE_TEXT,
+        "link_text": str(hotel.get("alternative_link_text") or "").strip() or "Посмотреть другие туры",
+        "url": raw_url if target_valid else "",
+    }
+
+
 def _static_seo(path: str) -> dict[str, Any]:
     settings = _settings()
     configured = settings.get("seo_pages") if isinstance(settings.get("seo_pages"), dict) else {}
@@ -908,6 +967,7 @@ def _hotel_seo(slug: str, path: str) -> dict[str, Any]:
     hotel = next((h for h in hotel_records(tours, catalog, public=True) if h["slug"] == slug), None)
     if not hotel:
         return {**_not_found(), "heading": "Отель не найден", "title": "Отель не найден | TRAVELSPACE"}
+    hotel["alternative_offer"] = hotel_alternative_offer(hotel)
     description = _first_text(hotel.get("seo_description"), hotel.get("short_description"), hotel.get("description"), f'{hotel["name"]}: номера, питание и расположение.')
     image = hotel.get("seo_image") or next(iter(hotel.get("images") or []), None) or hotel.get("image") or DEFAULT_IMAGE
     canonical = _record_canonical(hotel, path)
@@ -921,6 +981,36 @@ def _hotel_seo(slug: str, path: str) -> dict[str, Any]:
     }
 
 
+def _visa_seo(slug: str, path: str) -> dict[str, Any]:
+    visa = public_visa(slug)
+    if not visa:
+        return {**_not_found(), "heading": "Направление не найдено", "title": "Виза не найдена | TRAVELSPACE"}
+    return {
+        "title": visa.get("seo_title") or f'{visa["title"]} | TRAVELSPACE',
+        "heading": visa.get("seo_h1") or visa.get("title"),
+        "description": visa.get("seo_description") or visa.get("subtitle") or DEFAULT_DESCRIPTION,
+        "image": visa.get("seo_image") or visa.get("hero_image") or DEFAULT_IMAGE,
+        "canonical_url": _record_canonical(visa, path),
+        "no_index": bool(visa.get("seo_noindex")),
+        "no_follow": bool(visa.get("seo_nofollow")),
+        "type": "website", "record": visa,
+    }
+
+
+def _visas_page_seo() -> dict[str, Any]:
+    page = visa_page()
+    return {
+        "title": page.get("seo_title") or "Визы в страны ЕС | TRAVELSPACE",
+        "heading": page.get("seo_h1") or page.get("title") or "Визы в страны ЕС",
+        "description": page.get("seo_description") or page.get("subtitle") or DEFAULT_DESCRIPTION,
+        "image": page.get("seo_image") or page.get("hero_image") or DEFAULT_IMAGE,
+        "canonical_url": _record_canonical(page, "/visa"),
+        "no_index": bool(page.get("seo_noindex")),
+        "no_follow": bool(page.get("seo_nofollow")),
+        "type": "website", "record": page,
+    }
+
+
 def _article_seo(slug: str, path: str) -> dict[str, Any]:
     article = next((item for item in _article_state() if item.get("slug") == slug), None)
     if not is_public_article(article):
@@ -929,7 +1019,7 @@ def _article_seo(slug: str, path: str) -> dict[str, Any]:
     canonical_url = _record_canonical(article, path)
     structured: dict[str, Any] = {
         "@type": "Article",
-        "headline": article.get("seo_h1") or article.get("title"),
+        "headline": article.get("title"),
         "description": _limit(description, 220),
         "mainEntityOfPage": canonical_url,
         "image": _absolute_url(article.get("seo_image") or article.get("cover") or DEFAULT_IMAGE),
@@ -943,7 +1033,7 @@ def _article_seo(slug: str, path: str) -> dict[str, Any]:
     return {
         "title": _first_text(article.get("seo_title"), f"{article.get('title', 'Статья')} | TRAVELSPACE"),
         "description": description,
-        "heading": article.get("seo_h1") or article.get("title"),
+        "heading": article.get("title"),
         "image": article.get("seo_image") or article.get("cover") or DEFAULT_IMAGE,
         "canonical_url": canonical_url,
         "no_index": bool(article.get("seo_noindex", False)),
@@ -958,6 +1048,20 @@ def get_redirect_target(path: str) -> str | None:
     path = _clean_path(path)
     if path in BUILT_IN_REDIRECTS:
         return BUILT_IN_REDIRECTS[path]
+    if path == "/visas":
+        return "/visa"
+    if path.startswith("/visas/"):
+        old_slug = path.removeprefix("/visas/")
+        for visa in public_visas():
+            if old_slug == visa.get("slug"):
+                return "/visa/" + visa["slug"]
+            if old_slug in (visa.get("old_slugs") or []):
+                return "/visa/" + visa["slug"]
+    if path.startswith("/visa/"):
+        old_slug = path.removeprefix("/visa/")
+        for visa in public_visas():
+            if old_slug in (visa.get("old_slugs") or []):
+                return "/visa/" + visa["slug"]
     article_target = (
         article_redirect_target(path, _article_state())
         if path.startswith("/blog/")
@@ -979,8 +1083,11 @@ def get_http_status_for_path(path: str) -> int:
     path = _clean_path(path)
     if path.startswith("/admin"):
         return 200
-    if path in STATIC_PAGE_FALLBACKS or path in _landing_pages() or path in SERVICE_PAGES:
+    if path == "/visa" or path in STATIC_PAGE_FALLBACKS or path in _landing_pages() or path in SERVICE_PAGES:
         return 200
+    if path.startswith("/visa/"):
+        slug = path.removeprefix("/visa/")
+        return 200 if "/" not in slug and public_visa(slug) else 404
     if path.startswith("/tours/"):
         slug = path.removeprefix("/tours/")
         return 200 if "/" not in slug and is_public_tour(get_by("tours", "slug", slug)) else 404
@@ -1009,6 +1116,10 @@ def get_seo_for_path(path: str) -> dict[str, Any]:
             "no_index": True,
             "type": "website",
         }
+    if path == "/visa":
+        return _visas_page_seo()
+    if path.startswith("/visa/"):
+        return _visa_seo(path.removeprefix("/visa/"), path)
     if path in _landing_pages():
         return _landing_seo(path)
     if path.startswith("/tours/"):
@@ -1037,9 +1148,12 @@ def _breadcrumb_items(path: str, seo: dict[str, Any]) -> list[dict[str, Any]]:
             items.append({"@type": "ListItem", "position": 2, "name": "Туры", "item": _page_url("/tours")})
         elif path.startswith("/blog/"):
             items.append({"@type": "ListItem", "position": 2, "name": "Блог", "item": _page_url("/blog")})
+        elif path.startswith("/visa/"):
+            items.append({"@type": "ListItem", "position": 2, "name": "Визы", "item": _page_url("/visa")})
         elif path.startswith("/hotels/") and seo.get("record"):
             hotel = seo["record"]
-            items.append({"@type": "ListItem", "position": 2, "name": hotel["tour_title"], "item": _page_url("/tours/" + hotel["tour_slug"])})
+            if hotel.get("tour_slug") and hotel.get("tour_title"):
+                items.append({"@type": "ListItem", "position": 2, "name": hotel["tour_title"], "item": _page_url("/tours/" + hotel["tour_slug"])})
         items.append({
             "@type": "ListItem",
             "position": len(items) + 1,
@@ -1192,8 +1306,10 @@ def _render_paragraphs(value: Any, limit: int | None = 8, semantic_headings: boo
     selected_chunks = chunks if limit is None else chunks[:limit]
     for chunk in selected_chunks:
         clean = re.sub(r"<[^>]+>", "", str(chunk)).strip()
-        if semantic_headings and clean.startswith("## "):
-            rendered.append(f"<h2>{_render_rich_inline(clean[3:])}</h2>")
+        markdown_heading = re.match(r"^(#{2,4})\s+(.+)$", clean) if semantic_headings else None
+        if markdown_heading:
+            level = len(markdown_heading.group(1))
+            rendered.append(f"<h{level}>{_render_rich_inline(markdown_heading.group(2))}</h{level}>")
             continue
         semantic = re.match(r"^(\d+)\.\s+(.+?[.!?])(?:\s+(.+))?$", clean) if semantic_headings else None
         if semantic:
@@ -1465,13 +1581,15 @@ def _render_tour_dates_and_prices(tour: dict[str, Any]) -> str:
 def _tour_list(tours: Iterable[dict[str, Any]]) -> str:
     items = []
     for tour in tours:
-        description = tour.get("short_description") or tour.get("tagline") or tour.get("description")
+        subtitle = tour.get("tagline") or tour.get("short_description")
+        description = tour.get("description")
         items.append(
             "<li>"
             + "<h3>"
             + _link(f"/tours/{tour['slug']}", tour.get("title") or "Тур")
             + "</h3>"
-            + (f"<p>{escape(_limit(description, 240))}</p>" if description else "")
+            + (f"<h3>{_render_rich_inline(_limit(subtitle, 180))}</h3>" if subtitle else
+               f"<p>{escape(_limit(description, 240))}</p>" if description else "")
             + "</li>"
         )
     return "<ul>" + "".join(items) + "</ul>" if items else "<p>Новые даты и маршруты скоро появятся в каталоге.</p>"
@@ -1482,6 +1600,7 @@ def _global_navigation() -> str:
         ("/", "Главная"),
         ("/tours", "Все туры"),
         ("/promotions", "Акции"),
+        ("/visa", "Визы"),
         ("/blog", "Блог"),
         ("/reviews", "Отзывы"),
         ("/about", "О компании"),
@@ -1801,17 +1920,32 @@ def _render_seo_hub_faq(seo: dict[str, Any]) -> str:
 
 def _render_article_body(article: dict[str, Any]) -> str:
     parts = []
+    menu = article_menu_links(article)
+    linked_anchors = {item["anchor"] for item in menu}
+    if menu:
+        parts.append('<nav aria-label="Меню статьи"><ul>')
+        for item in menu:
+            parts.append(f'<li><a href="#{escape(item["anchor"], quote=True)}">{escape(item["title"])}</a></li>')
+        parts.append("</ul></nav>")
     for block in article_blocks(article):
         if not isinstance(block, dict):
             continue
+        anchor = str(block.get("anchor") or "").strip()
+        anchor_attr = f' id="{escape(anchor, quote=True)}"' if anchor in linked_anchors else ""
         if block.get("type") == "text":
-            parts.append(_render_paragraphs(block.get("text"), limit=None, semantic_headings=True))
+            body = _render_paragraphs(block.get("text"), limit=None, semantic_headings=True)
+            if block.get("show_map") is True and str(block.get("map_place") or "").strip():
+                place = str(block["map_place"]).strip()
+                href = "https://yandex.ru/maps/?text=" + quote(place)
+                body += f'<p>Место на карте: <a href="{escape(href, quote=True)}">{escape(place)}</a></p>'
+            if body:
+                parts.append(f'<section{anchor_attr}>{body}</section>' if anchor_attr else body)
         elif block.get("type") == "image":
             src = str(block.get("src") or "").strip()
             if not src or not (src.startswith("/") and not src.startswith("//") or src.startswith(("https://", "http://"))):
                 continue
-            alt = str(block.get("alt") or article.get("seo_h1") or article.get("title") or "")
-            parts.append(f'<figure><img src="{escape(_absolute_url(src), quote=True)}" alt="{escape(alt, quote=True)}" width="1200" height="750" loading="lazy"></figure>')
+            alt = str(block.get("alt") or article.get("title") or "")
+            parts.append(f'<figure{anchor_attr}><img src="{escape(_absolute_url(src), quote=True)}" alt="{escape(alt, quote=True)}" width="1200" height="750" loading="lazy"></figure>')
     return "".join(parts)
 
 
@@ -1902,7 +2036,9 @@ def _render_seo_hub_video(seo: dict[str, Any]) -> str:
     return (
         f'<section data-hub-youtube="true"><h2>{escape(title)}</h2><p>'
         f'<a href="{escape(href, quote=True)}" rel="noopener noreferrer">'
-        'Посмотреть видео на YouTube</a></p></section>'
+        'Посмотреть видео на YouTube</a></p>'
+        + (f'<p>{escape(str(seo["youtube_description"]).strip())}</p>' if str(seo.get("youtube_description") or "").strip() else "")
+        + '</section>'
     )
 
 
@@ -2001,6 +2137,19 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         )
         parts.append(f"<h2>{escape(catalog_title)}</h2>")
         parts.append(_tour_list(tours_for_landing(path)))
+        hub_hotels = hotels_for_landing(path)
+        if hub_hotels:
+            parts.append("<section><h2>Отели в турах этого направления</h2><ul>")
+            for hotel in hub_hotels:
+                details = " · ".join(filter(None, (
+                    hotel.get("location"), hotel.get("meal"),
+                    f'{hotel["room_count"]} категорий номеров' if hotel.get("room_count") else "",
+                )))
+                parts.append(
+                    "<li><h3>" + _link("/hotels/" + hotel["slug"], hotel["name"])
+                    + "</h3>" + (f"<p>{escape(details)}</p>" if details else "") + "</li>"
+                )
+            parts.append("</ul></section>")
         video = _render_seo_hub_video(seo)
         if video:
             parts.append(video)
@@ -2012,6 +2161,26 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         faq = _render_seo_hub_faq(seo)
         if faq:
             parts.append(faq)
+    elif path == "/visa":
+        page = visa_page()
+        parts.append(_render_rich_paragraphs(page.get("intro_text")))
+        parts.append(f'<h2>{escape(str(page.get("intro_title") or "Выберите направление"))}</h2><ul>')
+        for visa in public_visas():
+            parts.append(f'<li>{_link("/visa/" + visa["slug"], visa.get("title") or visa.get("country"))}<p>{escape(str(visa.get("card_text") or ""))}</p></li>')
+        parts.append("</ul>")
+        parts.append(f'<h2>{escape(str(page.get("steps_title") or ""))}</h2>')
+        for step in page.get("steps") or []:
+            parts.append(f'<h3>{escape(str(step.get("title") or ""))}</h3>' + _render_rich_paragraphs(step.get("text")))
+        for question in page.get("faq") or []:
+            parts.append(f'<h3>{escape(str(question.get("question") or ""))}</h3>' + _render_rich_paragraphs(question.get("answer")))
+    elif path.startswith("/visa/") and seo.get("record"):
+        visa = seo["record"]
+        parts.append(_render_rich_paragraphs(visa.get("overview_text")))
+        for section in visa.get("sections") or []:
+            parts.append(f'<h2>{escape(str(section.get("title") or ""))}</h2>' + _render_rich_paragraphs(section.get("text")))
+        for question in visa.get("faq") or []:
+            parts.append(f'<h2>{escape(str(question.get("question") or ""))}</h2>' + _render_rich_paragraphs(question.get("answer")))
+        parts.append(f'<p>{_link("/visa", "Другие страны ЕС")}</p>')
     elif path == "/blog":
         parts.append("<ul>")
         for article in _article_state():
@@ -2023,13 +2192,16 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
         parts.append(_render_static_page_content(path))
     elif path.startswith("/tours/") and seo.get("record"):
         tour = seo["record"]
+        subtitle = tour.get("tagline") or tour.get("short_description")
         description = _render_paragraphs(
             tour.get("description") or tour.get("short_description"), limit=None
         )
-        if description:
+        if description or subtitle:
             parts.append(
                 _tour_anchor_markers(tour, "about", "about-tour")
-                + f"<h2>О туре</h2>{description}"
+                + "<h2>О туре</h2>"
+                + (f"<h3>{_render_rich_inline(subtitle)}</h3>" if subtitle else "")
+                + description
             )
         gallery = _render_tour_gallery(tour)
         if gallery:
@@ -2133,6 +2305,16 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             )
     elif path.startswith("/hotels/") and seo.get("record"):
         hotel = seo["record"]
+        offer = hotel.get("alternative_offer")
+        if offer:
+            parts.append("<section><h2>Другие варианты поездки</h2>")
+            parts.append(f'<p>{escape(offer["text"])}</p>')
+            if offer.get("url"):
+                parts.append(
+                    f'<p><a href="{escape(offer["url"], quote=True)}">'
+                    f'{escape(offer["link_text"])}</a></p>'
+                )
+            parts.append("</section>")
         parts.append(_render_rich_paragraphs(hotel.get("description")))
         for field, label in (("meal_description", "Питание"), ("location_description", "Расположение"), ("beach", "Пляж"), ("transfer", "Трансфер"), ("rules", "Условия проживания")):
             if hotel.get(field):
@@ -2144,6 +2326,16 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
             parts.append('<h2>Номера</h2>')
             for room in hotel["rooms"]:
                 parts.append(f'<h3>{escape(str(room.get("title") or room.get("number") or "Номер"))}</h3>{_render_rich_paragraphs(room.get("description"))}')
+        hotel_video_id = _youtube_video_id(hotel.get("youtube_url"))
+        if hotel_video_id:
+            video_title = _strip_html(hotel.get("youtube_title")) or "Видео об отеле"
+            video_description = str(hotel.get("youtube_description") or "").strip()
+            parts.append(
+                f'<section><h2>{escape(video_title)}</h2><p>'
+                f'<a href="https://www.youtube.com/watch?v={hotel_video_id}">Посмотреть видео на YouTube</a></p>'
+                + (f'<p>{escape(video_description)}</p>' if video_description else "")
+                + '</section>'
+            )
         connections = hotel.get("connections") or []
         if connections:
             parts.append("<h2>Туры с проживанием в этом отеле</h2><ul>")
@@ -2151,10 +2343,13 @@ def _render_snapshot(path: str, seo: dict[str, Any]) -> str:
                 href = "/tours/" + str(connection.get("tour_slug") or "") + "#" + str(connection.get("tour_hotel_anchor") or "dates-prices")
                 parts.append(f'<li>{_link(href, str(connection.get("tour_title") or "Даты и программа тура"))}</li>')
             parts.append("</ul>")
-        else:
-            parts.append(f'<p>{_link("/tours", "Посмотреть актуальные туры")}</p>')
     elif path.startswith("/blog/") and seo.get("record"):
-        parts.append(_render_article_body(seo["record"]))
+        article = seo["record"]
+        parts.append(_render_article_body(article))
+        article_faq = _render_tour_faq(article.get("faq"))
+        if article_faq:
+            faq_title = str(article.get("faq_title") or "").strip() or "Часто задаваемые вопросы"
+            parts.append(f'<section><h2>{escape(faq_title)}</h2>{article_faq}</section>')
         parts.append(f"<p>{_link('/tours', 'Посмотреть актуальные туры')}</p>")
     if seo.get("page_faq_items"):
         parts.append(f'<section><h2>{escape(str(seo["page_faq_title"]))}</h2>')
@@ -2172,13 +2367,17 @@ departure_city departure_cities departureCities price price_from currency additi
 additional_currency price_type badges hero_image hero_image_alt hero_mobile hero_mobile_image
 mobile_hero_image og_image gallery gallery_alts images cover cover_alt image
 dates chains hotels connections use_hotel_chains show_chain_dates program highlights what_to_see included excluded
-important_info section_anchors faq map_embed content excerpt related_tour_slugs related_tours_title videos youtube_title youtube_url seo_title seo_description
+important_info section_anchors faq map_embed content excerpt related_tour_slugs related_tours_title videos youtube_title youtube_url youtube_description seo_title seo_description
 seo_h1 seo_image seo_canonical_url seo_noindex seo_nofollow seo_lastmod published_at updated_at
-content_blocks gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
+content_blocks show_article_menu article_menu_items gallery_alts image_alts name text rating date photo question answer show_on_home category valid_until related_tour_slug
 button_text button_url discount value subtitle tour_name
 hotel_id tour_id tour_slug tour_title chain_id chain_title tour_hotel_anchor rooms
+country_code country eyebrow card_text card_image card_image_alt overview_title overview_text
+sections steps steps_title intro_title intro_text faq_title cta_title cta_text cta_button note
+hero_button hero_caption directions_kicker card_link_text steps_kicker faq_kicker cta_kicker
+form_title form_description back_label more_label overview_kicker section_kicker
 meal meal_description location address location_description nearby amenities beach
-transfer check_in check_out rules stars map_url page_enabled
+transfer check_in check_out rules stars map_url page_enabled alternative_offer
 """.split())
 PUBLIC_SETTINGS_FIELDS = set("""
 company_short company_name address email phone phone_link site_url work_hours header_phones
@@ -2374,6 +2573,8 @@ def _page_bootstrap(path: str, seo: dict[str, Any]) -> dict:
             "reviews": reviews,
             "promotions": promotions,
             "faq": faq,
+            "visas": [_public_record(visa, {"id", "slug", "country_code", "country", "title", "subtitle", "card_text", "card_image", "card_image_alt", "hero_image", "hero_image_alt", "order"}) for visa in public_visas()] if path == "/visa" else [],
+            "hub_hotels": hotels_for_landing(path) if path in _landing_pages(settings) else [],
         },
     }
 
@@ -2497,6 +2698,12 @@ def build_sitemap_xml() -> str:
     for hotel in hotel_records(hotel_tours, hotel_catalog, public=True):
         if not hotel.get("seo_noindex"):
             entries.append((f'/hotels/{hotel["slug"]}', _sitemap_date(hotel.get("updated_at"))))
+    page = visa_page()
+    if not page.get("seo_noindex"):
+        entries.append(("/visa", _sitemap_date(page.get("updated_at"))))
+    for visa in public_visas():
+        if not visa.get("seo_noindex"):
+            entries.append((f'/visa/{visa["slug"]}', _sitemap_date(visa.get("updated_at"))))
     unique: dict[str, str | None] = {}
     for path, lastmod in entries:
         unique.setdefault(_clean_path(path), lastmod)

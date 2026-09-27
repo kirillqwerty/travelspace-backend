@@ -10,7 +10,7 @@ FastAPI serves the React build and injects runtime SEO meta for page URLs.
 
 from __future__ import annotations
 
-from article_content import sync_article_text
+from article_content import remove_legacy_article_h1, sync_article_text
 from article_slugs import article_slug_patch, migrate_article_slugs
 from hotels import (
     decorate_tour,
@@ -90,6 +90,7 @@ from homepage import (
     settings_with_home_defaults,
 )
 from seed import run_seed
+from visas import ensure_visa_seed, public_visa, public_visas, save_visa, visa_page, EU_COUNTRIES
 from seo_runtime import (
     FRONTEND_BUILD_DIR,
     build_robots_txt,
@@ -97,6 +98,8 @@ from seo_runtime import (
     canonical_url_for_path,
     get_http_status_for_path,
     get_redirect_target,
+    hotel_alternative_offer,
+    hotels_for_landing,
     is_listed_article,
     is_listed_tour,
     is_public_tour,
@@ -319,7 +322,7 @@ class LeadIn(BaseModel):
     comment: str | None = None
     source_page: str | None = None
     consent: bool = True
-    form_type: str = "consultation"  # consultation | tour | agency
+    form_type: str = "consultation"  # consultation | tour | agency | visa
     extra: dict | None = None
     event_id: str | None = None
     page_url: str | None = None
@@ -372,6 +375,7 @@ def _lead_form_type_label(form_type: str | None) -> str:
         "consultation": "Консультация",
         "tour": "Заявка на тур",
         "agency": "Заявка агентства",
+        "visa": "Визовая консультация",
     }
     return labels.get(form_type or "", form_type or "Заявка")
 
@@ -397,7 +401,7 @@ def _lead_email_rows(lead: dict) -> list[tuple[str, str]]:
         ("Имя", _as_text(lead.get("name")) or "—"),
         ("Телефон", _as_text(lead.get("phone"))),
         ("Количество человек", _as_text(lead.get("travelers_count")) or "—"),
-        ("Тур", _as_text(lead.get("tour")) or "—"),
+        ("Направление" if lead.get("form_type") == "visa" else "Тур", _as_text(lead.get("tour")) or "—"),
         ("Дата", _as_text(lead.get("date")) or "—"),
         ("Комментарий", _as_text(lead.get("comment")) or "—"),
         ("Slug тура", _as_text(lead.get("tour_slug")) or "—"),
@@ -1127,10 +1131,12 @@ def _hotel_state(tours: list[dict] | None = None) -> tuple[list[dict], list[dict
 
 
 def _article_state() -> list[dict]:
-    """Load articles and persist the one-time underscore-to-hyphen migration."""
+    """Load articles and persist slug and heading field migrations."""
 
     articles = list_items("articles")
-    if migrate_article_slugs(articles):
+    slugs_changed = migrate_article_slugs(articles)
+    headings_changed = remove_legacy_article_h1(articles)
+    if slugs_changed or headings_changed:
         save("articles", articles)
     return articles
 
@@ -1180,7 +1186,34 @@ async def get_hotel(slug: str):
     hotel = next((h for h in hotel_records(tours, catalog, public=True) if h["slug"] == slug), None)
     if not hotel:
         raise HTTPException(404, "Отель не найден")
+    hotel["alternative_offer"] = hotel_alternative_offer(hotel)
     return hotel
+
+
+@api.get("/seo-hubs/{slug}/hotels")
+async def get_seo_hub_hotels(slug: str):
+    return hotels_for_landing(f"/tours/{slug}")
+
+
+@api.get("/visa-page")
+@api.get("/visas-page", include_in_schema=False)
+async def get_visas_page():
+    return visa_page()
+
+
+@api.get("/visa")
+@api.get("/visas", include_in_schema=False)
+async def get_visas():
+    return public_visas()
+
+
+@api.get("/visa/{slug}")
+@api.get("/visas/{slug}", include_in_schema=False)
+async def get_visa(slug: str):
+    record = public_visa(slug)
+    if not record:
+        raise HTTPException(404, "Страница визы не найдена")
+    return record
 
 
 @api.get("/tours/{slug}/program.pdf")
@@ -1608,7 +1641,7 @@ def _content_changed(existing: dict, payload: dict) -> bool:
 def _normalize_content_seo(name: str, item: dict, existing: dict | None = None) -> None:
     if name == "articles":
         try:
-            sync_article_text(item)
+            sync_article_text(item, existing)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
     if name not in CONTENT_COLLECTIONS:
@@ -1681,6 +1714,11 @@ def _backfill_home_content_timestamp() -> None:
 
 
 def _crud_create(name: str, payload: dict) -> dict:
+    if name == "visas":
+        try:
+            return save_visa(payload)
+        except (ValueError, TypeError) as error:
+            raise HTTPException(422, str(error)) from error
     if name == "hotels":
         tours, catalog = _hotel_state()
         result = edit_hotel(catalog, tours, payload, timestamp=_now())
@@ -1688,6 +1726,7 @@ def _crud_create(name: str, payload: dict) -> dict:
         return result
     item = {**payload, "id": str(uuid.uuid4())}
     if name == "articles":
+        item.pop("seo_h1", None)
         item = _prepare_article_slug_payload(item)
     item.pop("_hotels_revision", None)
     _normalize_content_seo(name, item)
@@ -1714,6 +1753,13 @@ def _crud_create(name: str, payload: dict) -> dict:
 
 
 def _crud_update(name: str, item_id: str, payload: dict) -> dict:
+    if name == "visas":
+        try:
+            return save_visa(payload, item_id)
+        except LookupError as error:
+            raise HTTPException(404, str(error)) from error
+        except (ValueError, TypeError) as error:
+            raise HTTPException(422, str(error)) from error
     if name == "hotels":
         tours, catalog = _hotel_state()
         result = edit_hotel(catalog, tours, payload, item_id, timestamp=_now())
@@ -1749,8 +1795,11 @@ def _crud_update(name: str, item_id: str, payload: dict) -> dict:
             return decorate_tour(existing, catalog, admin=True)
         return mutate_items("tours", update_tour)
     payload = {**payload}
+    if name == "articles":
+        _article_state()
     existing = get_by(name, "id", item_id)
     if name == "articles":
+        payload.pop("seo_h1", None)
         payload = _prepare_article_slug_payload(payload, existing)
     _normalize_content_seo(name, payload, existing)
 
@@ -1802,11 +1851,43 @@ def _crud_delete(name: str, item_id: str) -> dict:
 COLLECTIONS = [
     "tours",
     "hotels",
+    "visa",
+    "visas",
     "reviews",
     "articles",
     "faq",
     "promotions",
 ]
+
+
+@api.get("/admin/visa-page")
+async def admin_get_visa_page(current=Depends(get_current_admin)):
+    return {"page": visa_page(), "countries": EU_COUNTRIES}
+
+
+@api.get("/admin/visa-demand")
+@api.get("/admin/visas-demand", include_in_schema=False)
+async def admin_visas_demand(current=Depends(get_current_admin)):
+    by_country: dict[str, int] = {}
+    general = 0
+    for lead in list_items("leads"):
+        if lead.get("form_type") != "visa":
+            continue
+        country = str(lead.get("region") or "").strip()
+        if country in EU_COUNTRIES.values():
+            by_country[country] = by_country.get(country, 0) + 1
+        else:
+            general += 1
+    return {"total": sum(by_country.values()) + general, "general": general, "by_country": by_country}
+
+
+@api.put("/admin/visa-page")
+async def admin_save_visa_page(payload: dict, current=Depends(get_current_admin)):
+    updated = {**visa_page(), **payload, "updated_at": _now()}
+    updated["steps"] = [item for item in updated.get("steps", []) if isinstance(item, dict)]
+    updated["faq"] = [item for item in updated.get("faq", []) if isinstance(item, dict)]
+    save("visa_page", updated)
+    return updated
 
 
 @api.get("/admin/settings")
@@ -1874,6 +1955,8 @@ async def admin_reorder_tours(
 async def admin_list(collection: str, current=Depends(get_current_admin)):
     if collection not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
+    if collection == "visa":
+        collection = "visas"
 
     if collection == "tours":
         tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
@@ -1884,6 +1967,8 @@ async def admin_list(collection: str, current=Depends(get_current_admin)):
     if collection == "hotels":
         tours, catalog = _hotel_state(_prune_all_tour_departure_dates())
         return hotel_records(tours, catalog)
+    if collection == "articles":
+        return _article_state()
 
     return list_items(collection)
 
@@ -1896,6 +1981,8 @@ async def admin_create(
 ):
     if collection not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
+    if collection == "visa":
+        collection = "visas"
 
     return _crud_create(collection, payload)
 
@@ -1909,6 +1996,8 @@ async def admin_update(
 ):
     if collection not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
+    if collection == "visa":
+        collection = "visas"
 
     return _crud_update(collection, item_id, payload)
 
@@ -1921,6 +2010,8 @@ async def admin_delete(
 ):
     if collection not in COLLECTIONS:
         raise HTTPException(status_code=404, detail="Unknown collection")
+    if collection == "visa":
+        collection = "visas"
 
     return _crud_delete(collection, item_id)
 
@@ -2026,7 +2117,7 @@ async def serve_react_static(file_path: str):
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
-async def serve_react_app(full_path: str):
+async def serve_react_app(full_path: str, request: Request = None):
     if full_path and full_path.endswith("/"):
         return RedirectResponse("/" + full_path.strip("/"), status_code=301)
 
@@ -2041,6 +2132,9 @@ async def serve_react_app(full_path: str):
 
     redirect_to = get_redirect_target(path)
     if redirect_to:
+        if request is not None and (path == "/visas" or path.startswith("/visas/")):
+            if request.url.query:
+                redirect_to = f"{redirect_to}?{request.url.query}"
         return RedirectResponse(redirect_to, status_code=301)
 
     html, status_code = _cached_public_page(path, _public_page_signature())
@@ -2097,6 +2191,7 @@ async def on_startup() -> None:
     validate_auth_configuration()
     seed_admin()
     run_seed()
+    ensure_visa_seed()
     _article_state()
     _backfill_content_timestamps()
     _backfill_home_content_timestamp()

@@ -12,6 +12,7 @@ TOURS = [
         "active": True,
         "hidden": False,
         "description": "Большая программа тура.",
+        "tagline": "Короткий подзаголовок тура",
         "region_name": "Грузия",
         "seo_h1": "Автобусный тур в Грузию из Минска",
         "price_from": 1200,
@@ -188,6 +189,7 @@ def test_rendered_page_has_one_metadata_set_and_semantic_snapshot(tmp_path, monk
     assert "<h1>Тур в Грузию</h1>" in html
     assert "<h1>Автобусный тур в Грузию из Минска</h1>" not in html
     assert "Большая программа тура" in html
+    assert "<h2>О туре</h2><h3>Короткий подзаголовок тура</h3>" in html
     assert "<h3>День 6 — Маршрут 6</h3>" in html
     assert "Полное описание дня 6." in html
     assert "Личные расходы" in html
@@ -275,6 +277,7 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
                 "cover_alt": "Панорама Санкт-Петербурга",
                 "youtube_title": "Санкт-Петербург глазами путешественника",
                 "youtube_url": '<iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0"></iframe>',
+                "youtube_description": "Прогулка по набережной и центру города.",
                 "content_title": "Полезный H2 после каталога",
                 "content_body": "Основной текст со [ссылкой](/tours/gruziya).",
                 "content_sections": [
@@ -314,6 +317,7 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
     assert 'data-hub-youtube="true"' in snapshot
     assert "<h2>Санкт-Петербург глазами путешественника</h2>" in snapshot
     assert "https://www.youtube.com/watch?v=dQw4w9WgXcQ" in snapshot
+    assert "Прогулка по набережной и центру города." in snapshot
     assert "<h2>Полезный H2 после каталога</h2>" in snapshot
     assert "<h3>Первый H3</h3>" in snapshot
     assert '<a href="/tours/gruziya" target="_blank" rel="noopener noreferrer">ссылкой</a>' in snapshot
@@ -345,6 +349,11 @@ def test_seo_hub_texts_are_editable_in_server_html_and_sitemap(monkeypatch):
         "    <lastmod>2026-08-28</lastmod>"
         in sitemap
     )
+
+
+def test_tour_card_subtitle_is_h3_in_server_catalog_markup():
+    html = seo_runtime._tour_list([{"slug": "sample-tour", "title": "Тур в Петербург", "tagline": "Пять дней в городе"}])
+    assert "<h3>Пять дней в городе</h3>" in html
 
 
 def test_bus_hub_has_complete_editable_content_defaults(monkeypatch):
